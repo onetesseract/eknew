@@ -1,7 +1,10 @@
 use std::fs;
 
+extern crate inkwell;
+
 mod lexer;
 mod parser;
+mod compiler;
 
 mod consts {
     pub const ANONYMOUS_FUNCTION_NAME: &str = "anonymous";
@@ -16,10 +19,11 @@ fn main() {
     prec.insert('+', 10);
     prec.insert('-', 10);
 
-    // let mut lx = lexer::Lexer::new(&fs::read_to_string("ex.txt").unwrap());
+    let y: &str = &fs::read_to_string("ex.txt").unwrap();
 
-    let mut x = parser::Parser::new(fs::read_to_string("ex.txt").unwrap(), &mut prec);
+    let mut x = parser::Parser::new(y, "ex.txt", prec);
 
     println!(": {:?}", x.parse_toplevel_expr().unwrap());
+    // println!(": {:?}", x.parse_toplevel_expr().unwrap());
 
 }

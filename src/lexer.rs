@@ -14,15 +14,29 @@ pub enum Token {
     For,
     Ident(String),
     If,
-    In,
+//    In,
     LParen,
     Number(f64),
+    Str(String),
     Op(char),
     RParen,
+    LBrace, // {
+    RBrace,
     Then,
     Unary,
-    Var,
+//    Var,
 }
+
+#[derive(Debug, Clone)]
+pub struct Lexer<'a> {
+    input: &'a str,
+    name: &'a str,
+    current: Option<LexResult>,
+
+    chars: Box<Peekable<Chars<'a>>>,
+    pos: usize,
+}
+
 
 #[derive(Debug, Clone)]
 pub struct LexError {
@@ -30,11 +44,32 @@ pub struct LexError {
     pub index: usize,
 }
 
-impl LexError {
+impl std::fmt::Display for LexError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}: {}", self.index, self.error)
+    }
+}
+
+impl<'a> LexError {
+    /*
     pub fn new(msg: &'static str) -> LexError {
         LexError { error: msg, index: 0 }
     }
+    */
+    fn err(&self, l: Lexer<'a>) {
+        let mut line = 0;
+        let mut col = 0;
+        let mut mypos = 0;
+        loop {
+            if mypos == self.index { break; }
+            match l.input.chars().nth(mypos).unwrap() {
+                '\n' => { line += 1; col = 0; mypos += 1 },
+                _ => { col += 1; mypos += 1} ,
+            }
+        }
 
+        let ln = l.input.lines();
+    }
     pub fn with_index(msg: &'static str, index: usize) -> LexError {
         LexError {error: msg, index: index}
     }
@@ -42,15 +77,7 @@ impl LexError {
 
 pub type LexResult = Result<Token, LexError>;
 
-#[derive(Debug, Clone)]
-pub struct Lexer<'a> {
-    input: String,
 
-    current: Option<LexResult>,
-
-    chars: Box<Peekable<Chars<'static>>>,
-    pos: usize,
-}
 
 impl <'a> Lexer<'a> {
 
@@ -64,28 +91,27 @@ impl <'a> Lexer<'a> {
         x
         
     }
-
+    /*
     pub fn peek(&mut self) -> LexResult {
         self.clone().advance()
     }
+    */
 
     pub fn advance(&mut self) -> LexResult {
         let x = self.lex();
         self.current = Some(x.clone());
-
         x
     }
 
-    pub fn new(input: String) -> Lexer<'a> {
+    pub fn new(input: &'a str, name: &'a str) -> Lexer<'a> {
         // let _input: &str = &input;
-        let x = input.clone();
-        let y = input.chars().peekable();
-        Lexer { current: None, input: input, pos: 0 }
+
+        Lexer { current: None, input: input.clone(), name: name, pos: 0, chars: Box::new(input.chars().peekable())}
     }
 
     pub fn lex(&mut self) -> LexResult {
-        let mut chars = self.chars.deref_mut();
-        let mut src = self.input;
+        let chars = self.chars.deref_mut();
+        let src = self.input.clone();
 
         let mut pos = self.pos;
 
@@ -97,7 +123,6 @@ impl <'a> Lexer<'a> {
 
                 if ch.is_none() {
                     self.pos = pos;
-
                     return Ok(Token::EOF);
                 }
 
@@ -122,6 +147,8 @@ impl <'a> Lexer<'a> {
         let result = match next.unwrap() {
             '(' => Ok(Token::LParen),
             ')' => Ok(Token::RParen),
+            '{' => Ok(Token::LBrace),
+            '}' => Ok(Token::RBrace),
             ',' => Ok(Token::Comma),
             '#' => {
                 // tis a comment
@@ -140,7 +167,7 @@ impl <'a> Lexer<'a> {
                 loop {
                     let ch = match chars.peek() {
                         Some(ch) => *ch,
-                        None => return Ok(Token::EOF),
+                        None => break,
                     };
 
                     if ch != '.' && !ch.is_digit(16) {
@@ -158,7 +185,7 @@ impl <'a> Lexer<'a> {
                 loop {
                     let ch = match chars.peek() {
                         Some(ch) => *ch,
-                        None => return Ok(Token::EOF),
+                        None => break,
                     };
 
                     if ch != '_' && !ch.is_alphanumeric() {
@@ -169,7 +196,7 @@ impl <'a> Lexer<'a> {
                     pos += 1;
                 }
 
-                // this is where I wanna impl id type
+                // this is not where I wanna impl id type
 
                 match &src[start..pos] {
                     "def" => Ok(Token::Def),
@@ -186,6 +213,25 @@ impl <'a> Lexer<'a> {
                     ident => Ok(Token::Ident(ident.to_string()))
                 }
             },
+            '"' => {
+                let mut is_esc = false;
+                let mut s: String = String::new();
+                loop {
+                    let x = chars.next();
+                    pos += 1;
+                    if x.is_none() {
+                        return Err(LexError::with_index("Unexpected EOF while parsing string literal", self.pos));
+                    }
+                    if is_esc { s.push(x.unwrap()); continue; }
+                    match x.unwrap_or('"') {
+                        '"' => break,
+                        '\\' => is_esc = false,
+                        x => s.push(x),
+                    }
+                }
+
+                Ok(Token::Str(s))
+            }
 
             op => {
                 Ok(Token::Op(op))
