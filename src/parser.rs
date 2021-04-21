@@ -35,7 +35,7 @@ pub enum ExprVal {
     Number(f64),
     Str(String),
     Variable(String),
-
+    Return(Box<Expr>),
     Function(Box<Function>),
 
     Block {
@@ -63,8 +63,8 @@ pub enum Type {
 
 #[derive(Debug, Clone)]
 pub struct Expr {
-    typ: Type,
-    ex: ExprVal
+    pub typ: Type,
+    pub ex: ExprVal
 }
 
 // defines the prototype of a function
@@ -364,12 +364,21 @@ impl<'a> Parser<'a> {
         Ok(Type::F64)
     }
 
+    fn parse_return(&mut self) -> Result<Expr, String> {
+        if self.advance().is_err() {
+            return Err(String::from("Expected return, got err advancing"));
+        }
+        return Ok(Expr { typ: Type::Void, ex: ExprVal::Return(Box::new(self.parse_expr().unwrap()))})
+    }
+
     fn parse_id_expr(&mut self) -> Result<Expr, String> {
         let id = match self.curr() {
             Token::Ident(id) => id,
             _ => return Err(format!("Expected id (got {:?}", self.curr())),
         };
-
+        if id == "return" {
+            return self.parse_return();
+        }
         if self.advance().is_err() {
             return Ok(Expr {typ: self.type_of_var(id.clone()).unwrap(), ex: ExprVal::Variable(id)});
         }
@@ -430,6 +439,24 @@ impl<'a> Parser<'a> {
                         self.advance().check();
                         // todo: implement decs
                         if !matches!(self.curr(), Token::LBrace) {
+
+                            let p = Prototype {
+                                name: id,
+                                args: args,
+                                
+                            };
+
+                            let f = Function {
+                                prototype: p,
+                                body: None,
+                                is_anon: false,
+                                
+                            };
+                            return Ok(Expr {
+                                typ: t,
+                                ex: ExprVal::Function(Box::new(f)),
+                                
+                            });
                             return Err(format!("Expected code block for function definition, found {:?}", self.curr()));
                         }
                         let b = self.parse_block().unwrap();
@@ -504,11 +531,6 @@ impl<'a> Parser<'a> {
         self.advance().check();
 
         let cond = self.parse_expr().unwrap();
-
-        match self.current() {
-            Ok(Token::Then) => self.advance().check(),
-            _ => return Err(format!("Expected `then` (got {:?}", self.current())),
-        }
 
         let then = self.parse_expr().unwrap();
 
@@ -630,7 +652,6 @@ impl<'a> Parser<'a> {
         }
 
         self.advance();
-
         return Ok(Expr { typ: Type::Void, ex: ExprVal::Block { body: body }})
 
 
@@ -645,7 +666,7 @@ impl<'a> Parser<'a> {
             Token::LBrace => self.parse_block(),
             Token::If => self.parse_conditional_expr(),
             Token::For => self.parse_for_expr(),
-            _ => panic!(),
+            _ => panic!("I don't know how to parse {:?}", self.curr()),
         }
     }
 
@@ -662,7 +683,15 @@ impl<'a> Parser<'a> {
                         })
                     }
                     ExprVal::VarDef { name, val } => {}
-                    _ => return Err(format!("Cannot parse {:?} as a top-level expr (can only take vardefs and functions)", expr.ex))
+                    x => return Ok(Function {
+                                    prototype: Prototype {
+                                        name: crate::consts::ANONYMOUS_FUNCTION_NAME.to_string(),
+                                        args: vec![],
+                
+                                    },
+                                    body: Some(expr),
+                                    is_anon: true
+                                })
                 }
                 Ok(Function {
                     prototype: Prototype {

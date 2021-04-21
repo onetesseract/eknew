@@ -1,3 +1,1 @@
-p(x str, y f64) str {
-    x = "hi"
-}
+p(199)

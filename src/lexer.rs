@@ -51,12 +51,7 @@ impl std::fmt::Display for LexError {
 }
 
 impl<'a> LexError {
-    /*
-    pub fn new(msg: &'static str) -> LexError {
-        LexError { error: msg, index: 0 }
-    }
-    */
-    fn err(&self, l: Lexer<'a>) {
+    /* fn err(&self, l: Lexer<'a>) {
         let mut line = 0;
         let mut col = 0;
         let mut mypos = 0;
@@ -69,7 +64,7 @@ impl<'a> LexError {
         }
 
         let ln = l.input.lines();
-    }
+    } */
     pub fn with_index(msg: &'static str, index: usize) -> LexError {
         LexError {error: msg, index: index}
     }
