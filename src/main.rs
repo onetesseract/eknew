@@ -48,9 +48,9 @@ fn main() {
     prec.insert('+', 10);
     prec.insert('-', 10);
 
-    let y: &str = &fs::read_to_string("ex.txt").unwrap();
+    // let y: &str = &fs::read_to_string("ex.txt").unwrap();
 
-    let mut x = parser::Parser::new(y, "ex.txt", prec);
+    // let mut x = parser::Parser::new(y, "ex.txt", prec);
 
     let context = Context::create();
     let module = context.create_module("repl");
@@ -80,12 +80,39 @@ fn main() {
 
     let mut prev_exprs: Vec<crate::parser::Function> = Vec::new();
 
+    let mut from_file = true;
+
+    let args: Vec<String> = std::env::args().collect();
+    println!("{:?}", args);
+    if args.contains(&String::from("nff")) {
+        from_file = false;
+    }
+
     loop {
         let mut input = String::new();
-        std::io::stdin().read_line(&mut input).expect("Could not read stdin");
-        println!("Reading file '{}'", input.trim());
+        loop {
+            let mut tmp = String::new();
+            std::io::stdin().read_line(&mut tmp).expect("Could not read stdin");
+            if from_file {
+                input = tmp;
+                break;
+            }
+            if tmp == "\n" {
+                break;
+            }
+            input += &tmp;
+            //input.push('\n');
 
-        let y: &str = &fs::read_to_string(input.clone().trim()).unwrap();
+            
+        }
+        let mut y;
+        if from_file {
+            println!("Reading file '{}'", input.trim());
+
+            y = fs::read_to_string(input.clone().trim()).unwrap();
+        } else {
+            y = input;
+        }
 
         let module = context.create_module("tmp");
 
@@ -94,8 +121,7 @@ fn main() {
         for i in prev_exprs.iter() {
             Compiler::compile(&context, &builder, &fpm, &module, i).expect("Failed to recompile fn");
         }
-
-        let (name, is_anon) = match parser::Parser::new(&y, &input, prec.clone()).parse_toplevel_expr() {
+        let (name, is_anon) = match parser::Parser::new(&y, &y, prec.clone()).parse_toplevel_expr() {
             Ok(fun) => {
                 if fun.is_anon {
                     println!("Expression parsed: {:?}\n\n", fun.body);
@@ -127,7 +153,7 @@ fn main() {
         };
 
         if is_anon {
-            let ex_engine = module.create_jit_execution_engine(inkwell::OptimizationLevel::None).unwrap();
+            /*let ex_engine = module.create_jit_execution_engine(inkwell::OptimizationLevel::None).unwrap();
 
             let maybe_fn = unsafe { ex_engine.get_function::<unsafe extern "C" fn() -> f64>(&name)};
             let comp_fn = match maybe_fn {
@@ -136,10 +162,11 @@ fn main() {
                     println!("Error executing: {:?}", e);
                     continue;
                 }
-            };
-            unsafe {
+            };*/
+            module.print_to_file("out.ll").unwrap();
+            /*unsafe {
                 println!("Executing: {}", comp_fn.call());
-            }
+            }*/
         }
         /* match Compiler::compile(&context, &builder, &fpm, &module, &f) {
             Ok(function) => {
