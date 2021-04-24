@@ -40,7 +40,7 @@ pub struct Lexer<'a> {
 
 #[derive(Debug, Clone)]
 pub struct LexError {
-    pub error: &'static str,
+    pub error: String,
     pub index: usize,
 }
 
@@ -51,21 +51,30 @@ impl std::fmt::Display for LexError {
 }
 
 impl<'a> LexError {
-    /* fn err(&self, l: Lexer<'a>) {
-        let mut line = 0;
+    pub fn err(&self, l: Lexer<'a>) -> String{
+        let mut line = 1;
         let mut col = 0;
-        let mut mypos = 0;
-        loop {
+        // let mut mypos = 0;
+        for i in l.input.chars() {
+            if i == '\n' {
+                line += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        /*loop {
             if mypos == self.index { break; }
             match l.input.chars().nth(mypos).unwrap() {
                 '\n' => { line += 1; col = 0; mypos += 1 },
                 _ => { col += 1; mypos += 1} ,
             }
-        }
-
-        let ln = l.input.lines();
-    } */
-    pub fn with_index(msg: &'static str, index: usize) -> LexError {
+        }*/
+        println!("{}", l.input.matches('\n').count());
+        println!("{}", l.name);
+        format!("{}:{}:{} {}", l.name, line, col, self.error)
+    }
+    pub fn with_index(msg: String, index: usize) -> LexError {
         LexError {error: msg, index: index}
     }
 }
@@ -215,7 +224,7 @@ impl <'a> Lexer<'a> {
                     let x = chars.next();
                     pos += 1;
                     if x.is_none() {
-                        return Err(LexError::with_index("Unexpected EOF while parsing string literal", self.pos));
+                        return Err(LexError::with_index(String::from("Unexpected EOF while parsing string literal"), self.pos));
                     }
                     if is_esc { s.push(x.unwrap()); continue; }
                     match x.unwrap_or('"') {

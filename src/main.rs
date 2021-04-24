@@ -3,6 +3,7 @@ use std::io::Write;
 
 use compiler::Compiler;
 use inkwell::{context::Context, passes::PassManager};
+use parser::Parser;
 
 extern crate inkwell;
 
@@ -78,46 +79,40 @@ fn main() {
     prec.insert('+', 10);
     prec.insert('-', 10);
 
-    let mut prev_exprs: Vec<crate::parser::Function> = Vec::new();
+    //let prev_exprs: Vec<crate::parser::Function> = Vec::new();
 
-    let mut from_file = true;
+    //let from_file = true;
 
     let args: Vec<String> = std::env::args().collect();
-    println!("{:?}", args);
-    if args.contains(&String::from("nff")) {
-        from_file = false;
-    }
+    println!("Reading file '{}'", args[1]);
+
+    let inp = fs::read_to_string(args[1].clone()).unwrap();
+
+    let module = context.create_module(&args[1]);
+
+    let mut p = Parser::new(&inp, args[1].as_str(), prec);
+
+    let mut exprs = vec![];
 
     loop {
-        let mut input = String::new();
-        loop {
-            let mut tmp = String::new();
-            std::io::stdin().read_line(&mut tmp).expect("Could not read stdin");
-            if from_file {
-                input = tmp;
-                break;
-            }
-            if tmp == "\n" {
-                break;
-            }
-            input += &tmp;
-            //input.push('\n');
-
-            
+        if p.at_end() {
+            break;
         }
-        let mut y;
-        if from_file {
-            println!("Reading file '{}'", input.trim());
+        exprs.push(p.parse_toplevel_expr().unwrap())
+    }
 
-            y = fs::read_to_string(input.clone().trim()).unwrap();
-        } else {
-            y = input;
-        }
+    for i in exprs.clone() {
+        println!("{:?}\n\n", i);
+    }
 
-        let module = context.create_module("tmp");
+    for i in exprs {
+        Compiler::compile(&context, &builder, &fpm, &module, &i).unwrap();
+    }
+
+    module.print_to_file("out.ll").unwrap();
 
         // compile every previously parsed fn into this new module
-
+    /*
         for i in prev_exprs.iter() {
             Compiler::compile(&context, &builder, &fpm, &module, i).expect("Failed to recompile fn");
         }
@@ -192,9 +187,9 @@ fn main() {
                 println!("Error: {}", e);
             }
         }*/
-    }
 
-    
+
+    */
 
 
 }

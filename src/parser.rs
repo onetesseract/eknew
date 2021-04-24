@@ -1,5 +1,6 @@
 use crate::lexer::Token;
 use crate::lexer::Lexer;
+use crate::lexer::LexError;
 
 use std::collections::HashMap;
 
@@ -58,7 +59,9 @@ pub struct ParserError {
 pub enum Type {
     F64,
     Str,
+    Int,
     Void,
+    Unknown,
 }
 
 #[derive(Debug, Clone)]
@@ -101,13 +104,13 @@ impl std::fmt::Display for ParserError {
     }
 }
 trait Throwable {
-    fn check(&self);
+    fn check(&self, l: Lexer);
 }
 
-impl Throwable for Result<(), ParserError> {
-    fn check(&self) {
+impl Throwable for Result<(), LexError> {
+    fn check(&self, l: Lexer) {
         if self.is_err() {
-            println!("{}", self.clone().unwrap_err());
+            println!("{}", self.clone().unwrap_err().err(l));
             panic!();
         }
     }
@@ -124,27 +127,6 @@ impl<'a> Parser<'a> {
             pos: 0,
         }
     }
-    /*
-    pub fn parse(&mut self) -> Result<Function, &'static str> {
-        let result = match self.current().unwrap() {
-            Token::Def => self.parse_def(),
-            Token::Extern => self.parse_extern(),
-            _ => self.parse_toplevel_expr(),
-        };
-
-        match result {
-            Ok(result) => {
-                if !self.at_end() {
-                    Err("Unexpected token after parsed expression")
-                } else {
-                    Ok(result)
-                }
-            },
-
-            err => err,
-        }
-    }
-    */
 
     fn peek(&mut self) -> Result<Token, crate::lexer::LexError> {
         let mut x = self.clone();
@@ -159,19 +141,19 @@ impl<'a> Parser<'a> {
         self.lexer.curr()
     }
 
-    fn advance(&mut self) -> Result<(), ParserError> {
+    fn advance(&mut self) -> Result<(), LexError> {
         let npos = self.pos + 1;
 
         self.pos = npos;
 
         if matches!(self.curr(), Token::EOF) {
-            return Err(ParserError {lexerr: None, err: Some("Unexpected EOF")});
+            return Err(LexError::with_index(String::from("Unexpected EOF"), self.pos));
         }
 
         let x = self.lexer.advance();
 
         if x.is_err() {
-            return Err(ParserError { lexerr: Some(x.unwrap_err()), err: None });
+            return Err(x.unwrap_err());
         }
 
         
@@ -180,7 +162,7 @@ impl<'a> Parser<'a> {
 
     }
 
-    fn at_end(&mut self) -> bool {
+    pub fn at_end(&mut self) -> bool {
         matches!(self.curr(), Token::EOF)
     }
 
@@ -195,22 +177,22 @@ impl<'a> Parser<'a> {
     fn parse_prototype(&mut self) -> Result<Prototype, &'static str> {
         let (id, is_operator, precedence) = match self.curr() {
             Token::Ident(id) => {
-                self.advance().check();
+                self.advance().check(self.lexer.clone());
                 (id, false, 0)
             },
             Token::Binary => {
-                self.advance().check();
+                self.advance().check(self.lexer.clone());
                 let op = match self.curr() {
                     Token::Op(ch) => ch,
                     _ => {return Err("Expected op in custom op declaration")}
                 };
-                self.advance().check();
+                self.advance().check(self.lexer.clone());
                 let mut name = String::from("binary");
 
                 name.push(op);
 
                 let prec = if let Token::Number(prec) = self.curr() {
-                    self.advance().check();
+                    self.advance().check(self.lexer.clone());
                     prec as usize
                 } else {
                     0
@@ -222,7 +204,7 @@ impl<'a> Parser<'a> {
             },
 
             Token::Unary => {
-                self.advance().check();
+                self.advance().check(self.lexer.clone());
 
                 let op = match self.curr() {
                     Token::Op(ch) => ch,
@@ -233,7 +215,7 @@ impl<'a> Parser<'a> {
 
                 name.push(op);
 
-                self.advance().check();
+                self.advance().check(self.lexer.clone());
 
                 (name, true, 0)
             },
@@ -246,10 +228,10 @@ impl<'a> Parser<'a> {
             _ => return Err("Expected `(` in prototype declaration")
         }
 
-        self.advance().check();
+        self.advance().check(self.lexer.clone());
 
         if let Token::RParen = self.curr() {
-            self.advance().check();
+            self.advance().check(self.lexer.clone());
             return Ok(Prototype {
                 name: id,
                 args: vec![],
@@ -265,11 +247,11 @@ impl<'a> Parser<'a> {
 
             match self.curr() {
                 Token::RParen => {
-                    self.advance().check();
+                    self.advance().check(self.lexer.clone());
                     break;
                 },
                 Token::Comma => {
-                    self.advance().check();
+                    self.advance().check(self.lexer.clone());
                 },
                 _ => return Err("Expected `,` or `)` in prototype declaration")
             }
@@ -339,7 +321,7 @@ impl<'a> Parser<'a> {
             _ => return Err(format!("Expected `(` at start of parenthezised expression (got {:?}", self.curr()))
         };
 
-        self.advance().check();
+        self.advance().check(self.lexer.clone());
 
         let expr = self.parse_expr().unwrap();
 
@@ -348,7 +330,7 @@ impl<'a> Parser<'a> {
             _ => return Err(String::from("Expected `)` at end of parenthesized expression"))
         };
 
-        self.advance().check();
+        self.advance().check(self.lexer.clone());
         Ok(expr)
     }
 
@@ -390,6 +372,7 @@ impl<'a> Parser<'a> {
                 let t = match &_id as &str {
                     "f64" => Type::F64,
                     "str" => Type::Str,
+                    "int" => Type::Int,
                     _ => return Err(format!("Unknown type {:?}", self.curr())),
                 };
                 if self.advance().is_err() {
@@ -397,18 +380,53 @@ impl<'a> Parser<'a> {
                 }
 
                 if let Token::Op('=') = self.curr() {
-                    self.advance().check();
+                    self.advance().check(self.lexer.clone());
                     let val = self.parse_expr().unwrap();
                     return Ok(Expr {typ: t, ex: ExprVal::VarDef{ name: id, val: Some(Box::new(val))}})
                 }
                 return Ok(Expr {typ: t, ex: ExprVal::VarDef { name: id, val: None }})
             },
             Token::LParen => {
-                self.advance().check();
+                println!("is lparen");
+                self.advance().check(self.lexer.clone());
 
                 if let Token::RParen = self.curr() {
-                    if let Token::Ident(id) = self.peek().unwrap() {
-                        
+                    self.advance();
+                    if let Token::Ident(__id) = self.curr() {
+                        let t = match &__id as &str {
+                            "f64" => Type::F64,
+                            "str" => Type::Str,
+                            "int" => Type::Int,
+                            _ => return Ok(Expr { typ: self.type_of_call(ExprVal::Call { fn_name: id.clone(), args: vec![] }).unwrap(), ex: ExprVal::Call { fn_name: id, args: vec![] }}),
+                        };
+                        self.advance().check(self.lexer.clone());
+                        if !matches!(self.curr(), Token::LBrace) {
+
+                            let p = Prototype {
+                                name: id,
+                                args: vec![],
+                                
+                            };
+
+                            let f = Function {
+                                prototype: p,
+                                body: None,
+                                is_anon: false,
+                                
+                            };
+                            return Ok(Expr {
+                                typ: t,
+                                ex: ExprVal::Function(Box::new(f)),
+                                
+                            });
+                            return Err(format!("Expected code block for function definition, found {:?}", self.curr()));
+                        }
+                        let b = self.parse_block().unwrap();
+
+                        let p = Prototype { name: id, args: vec![], };
+                        let f = Function { prototype: p, body: Some(b), is_anon: false };
+
+                        return Ok(Expr { typ: Type::Void, ex: ExprVal::Function(Box::new(f))});
                     }
                     return Ok(Expr { typ: self.type_of_call(ExprVal::Call { fn_name: id.clone(), args: vec![] }).unwrap(), ex: ExprVal::Call { fn_name: id, args: vec![] }});
                 }
@@ -422,21 +440,22 @@ impl<'a> Parser<'a> {
                         Token::RParen => break,
                         _ => return Err(String::from("Expected `,` in function call")),
                     };
-                    self.advance().check();
+                    self.advance().check(self.lexer.clone());
                 };
 
-                self.advance().check();
+                self.advance().check(self.lexer.clone());
 
                 if let Token::Ident(st) = self.curr() {
                     let t = match &st as &str {
                         "f64" => Some(Type::F64),
                         "str" => Some(Type::Str),
+                        "int" => Some(Type::Int),
                         "void" => Some(Type::Void),
                         _ => None,
                     };
                     if t.is_some() {
                         let t = t.unwrap();
-                        self.advance().check();
+                        self.advance().check(self.lexer.clone());
                         // todo: implement decs
                         if !matches!(self.curr(), Token::LBrace) {
 
@@ -476,7 +495,7 @@ impl<'a> Parser<'a> {
 
     fn parse_unary_expr(&mut self) -> Result<Expr, String> {
 
-        let typ = self.find_type().unwrap();
+        // let typ = self.find_type().unwrap();
 
         let op = match self.current().unwrap() {
             Token::Op(ch) => {
@@ -490,7 +509,7 @@ impl<'a> Parser<'a> {
 
         name.push(op);
 
-        Ok(Expr { typ: typ, ex: ExprVal::Call {
+        Ok(Expr { typ: Type::Unknown, ex: ExprVal::Call {
             fn_name: name,
             args: vec![ self.parse_unary_expr().unwrap() ]
         }})
@@ -509,7 +528,7 @@ impl<'a> Parser<'a> {
                 _ => return Err(format!("Invalid op (got {:?})", self.curr())),
             };
 
-            self.advance().check();
+            self.advance().check(self.lexer.clone());
 
             let mut right = self.parse_unary_expr().unwrap();
 
@@ -528,14 +547,14 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_conditional_expr(&mut self) -> Result<Expr, String> {
-        self.advance().check();
+        self.advance().check(self.lexer.clone());
 
         let cond = self.parse_expr().unwrap();
 
         let then = self.parse_expr().unwrap();
 
         match self.current() {
-            Ok(Token::Else) => self.advance().check(),
+            Ok(Token::Else) => self.advance().check(self.lexer.clone()),
             _ => return Err(format!("Expected `else` (got {:?})", self.current())),
         }
 
@@ -550,24 +569,24 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_for_expr(&mut self) -> Result<Expr, String> {
-        self.advance().check();
+        self.advance().check(self.lexer.clone());
 
         let name = match self.curr() {
             Token::Ident(n) => n,
             _ => return Err(String::from("Expected id in for loop")),
         };
 
-        self.advance().check();
+        self.advance().check(self.lexer.clone());
 
         match self.curr() {
-            Token::Op('=') => self.advance().check(),
+            Token::Op('=') => self.advance().check(self.lexer.clone()),
             _ => return Err(String::from("Expected `=` in for loop")),
         }
 
         let start = self.parse_expr().unwrap();
 
         match self.current().unwrap() {
-            Token::Comma => self.advance().check(),
+            Token::Comma => self.advance().check(self.lexer.clone()),
             _ => return Err(String::from("Expected `,` in for loop")),
         }
 
@@ -575,17 +594,12 @@ impl<'a> Parser<'a> {
 
         let step = match self.current().unwrap() {
             Token::Comma => {
-                self.advance().check();
+                self.advance().check(self.lexer.clone());
                 Some(self.parse_expr().unwrap())
             },
 
             _ => None,
         };
-
-        /*match self.current().unwrap() {
-            Token::In => self.advance().check(),
-            _ => return Err("Expected `in` in for loop"),
-        } */
 
         let body = self.parse_expr().unwrap();
         // todo
@@ -598,49 +612,8 @@ impl<'a> Parser<'a> {
         }})
     }
 
-    /*
-    fn parse_var_expr(&mut self) -> Result<Expr, String> {
-        self.advance().check();
-
-        let mut variables = Vec::new();
-
-        loop {
-            let name = match self.curr() {
-                Token::Ident(name) => name,
-                _ => return Err("Expected id in `var..in` declaration"),
-            };
-            self.advance().check();
-
-            let initialiser = match self.curr() {
-                Token::Op('=') => Some({self.advance().check(); self.parse_expr().unwrap()}),
-                _ => None,
-            };
-
-            variables.push((name, initialiser));
-
-            match self.curr() {
-                Token::Comma => self.advance().check(),
-                Token::In => {
-                    self.advance().check();
-                    break;
-                },
-                _ => {
-                    return Err("Expected comma or `in` in variable declaration");
-                }
-            };
-        }
-
-        let body = self.parse_expr().unwrap();
-
-        Ok(Expr::VarIn {
-            variables: variables,
-            body: Box::new(body),
-        })
-    }
-    */
-
     fn parse_block(&mut self) -> Result<Expr, String> {
-        self.advance().check();
+        self.advance().check(self.lexer.clone());
         let mut body: Vec<Expr> = vec![];
         let mut last;
         loop {
@@ -666,7 +639,11 @@ impl<'a> Parser<'a> {
             Token::LBrace => self.parse_block(),
             Token::If => self.parse_conditional_expr(),
             Token::For => self.parse_for_expr(),
-            _ => panic!("I don't know how to parse {:?}", self.curr()),
+            _ => {
+                let s = format!("I don't know how to parse {:?}", self.curr());
+                let l = LexError::with_index(s, self.pos);
+                panic!("{}", l.err(self.lexer.clone()))
+            },
         }
     }
 

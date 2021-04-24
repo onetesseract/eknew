@@ -1,1 +1,14 @@
-p(199)
+printd(x f64) f64
+
+printi(x int) int
+
+p(x f64) f64 {
+    return x + 1.0
+}
+
+neonmain() f64 {
+    printd(2.0)
+    printd(p(2.0))
+
+    return 1.0
+}

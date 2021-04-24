@@ -1,8 +1,11 @@
 #include <stdio.h>
 
-double p(double);
+double neonmain();
 
+double printd(double d) {
+    printf("%f\n", d);
+    return 1;
+}
 int main() {
-    double c = p(3);
-    printf("%f", c);
+    neonmain();
 }

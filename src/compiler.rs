@@ -22,6 +22,18 @@ pub struct Compiler<'a, 'ctx> {
     fn_value_opt: Option<FunctionValue<'ctx>>,
 }
 
+trait FloatOr<'ctx> {
+    fn float(&self) -> FloatValue<'ctx>;
+}
+
+impl<'ctx> FloatOr<'ctx> for BasicValueEnum<'ctx> {
+    fn float(&self) -> FloatValue<'ctx> {
+        if let BasicValueEnum::FloatValue(x) = &self {
+            return *x;
+        }
+        panic!("This is not a float!")
+    }
+}
 impl<'a, 'ctx> Compiler<'a, 'ctx> {
     // gets a function given name
     #[inline]
@@ -48,7 +60,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         builder.build_alloca(self.context.f64_type(), name)
     }
 
-    fn compile_expr(&mut self, expr: &Expr) -> Result<FloatValue<'ctx>, String> {
+    fn compile_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
         match expr.ex.clone() {
             ExprVal::Binary { op, left, right } => {
                 if op == '=' {
@@ -68,19 +80,19 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     let rhs = self.compile_expr(&right)?;
 
                     match op {
-                        '+' => Ok(self.builder.build_float_add(lhs, rhs, "tmpadd")),
-                        '-' => Ok(self.builder.build_float_sub(lhs, rhs, "tmpsub")),
-                        '*' => Ok(self.builder.build_float_mul(lhs, rhs, "tmpmul")),
-                        '/' => Ok(self.builder.build_float_div(lhs, rhs, "tmpdiv")),
+                        '+' => Ok(BasicValueEnum::FloatValue(self.builder.build_float_add(lhs.float(), rhs.float(), "tmpadd"))),
+                        '-' => Ok(BasicValueEnum::FloatValue(self.builder.build_float_sub(lhs.float(), rhs.float(), "tmpsub"))),
+                        '*' => Ok(BasicValueEnum::FloatValue(self.builder.build_float_mul(lhs.float(), rhs.float(), "tmpmul"))),
+                        '/' => Ok(BasicValueEnum::FloatValue(self.builder.build_float_div(lhs.float(), rhs.float(), "tmpdiv"))),
                         '<' => {
-                            let cmp = self.builder.build_float_compare(FloatPredicate::ULT, lhs, rhs, "tmpcmp");
+                            let cmp = self.builder.build_float_compare(FloatPredicate::ULT, lhs.float(), rhs.float(), "tmpcmp");
 
-                            Ok(self.builder.build_unsigned_int_to_float(cmp, self.context.f64_type(), "tmpbool"))
+                            Ok(BasicValueEnum::FloatValue(self.builder.build_unsigned_int_to_float(cmp, self.context.f64_type(), "tmpbool")))
                         }
                         '>' => {
-                            let cmp = self.builder.build_float_compare(FloatPredicate::ULT, rhs, lhs, "tmpcmp");
+                            let cmp = self.builder.build_float_compare(FloatPredicate::ULT, rhs.float(), lhs.float(), "tmpcmp");
 
-                            Ok(self.builder.build_unsigned_int_to_float(cmp, self.context.f64_type(), "tmpbool"))
+                            Ok(BasicValueEnum::FloatValue(self.builder.build_unsigned_int_to_float(cmp, self.context.f64_type(), "tmpbool")))
                         }
                         _ => Err(format!("Undefined operator `{}`", op)),
                     }
@@ -95,7 +107,14 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                         }
                         let argsv: Vec<BasicValueEnum> = comp_args.iter().by_ref().map(|&val| val.into()).collect();
                         match self.builder.build_call(fun, argsv.as_slice(), "tmp").try_as_basic_value().left() {
-                            Some(value) => Ok(value.into_float_value()),
+                            Some(value) => {
+                                match fun.get_type().get_return_type().unwrap() {
+                                    BasicTypeEnum::FloatType(_) => {
+                                        Ok(BasicValueEnum::FloatValue(value.into_float_value()))
+                                    }
+                                    _ => panic!("Unhandleable return type {:?}", fun.get_type().get_return_type().unwrap()),
+                                }
+                            }
                             None => Err(String::from("Invalid call produced")),
                         }
                     }
@@ -108,7 +127,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
                 // create condition by comparing with 0.0 and returning an int
                 let cond = self.compile_expr(&cond)?;
-                let cond = self.builder.build_float_compare(FloatPredicate::ONE, cond, zero_const, "ifcond");
+                let cond = self.builder.build_float_compare(FloatPredicate::ONE, cond.float(), zero_const, "ifcond");
 
                 // build branches
                 let then_bb = self.context.append_basic_block(parent, "then");
@@ -141,7 +160,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     (&else_val, else_bb)
                 ]);
 
-                Ok(phi.as_basic_value().into_float_value())
+                Ok(phi.as_basic_value())
             }
             ExprVal::For { var_name, start, end, step, body } => {
                 let parent = self.fn_value();
@@ -168,17 +187,17 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 //emit step
                 let step = match step {
                     Some(step) => self.compile_expr(&step)?,
-                    None => self.context.f64_type().const_float(1.0),
+                    None => BasicValueEnum::FloatValue(self.context.f64_type().const_float(1.0)),
                 };
 
                 // compile end condition
                 let end_cond = self.compile_expr(&end)?;
                 let curr_var = self.builder.build_load(start_alloca, &var_name);
-                let next_var = self.builder.build_float_add(curr_var.into_float_value(), step, "nextvar");
+                let next_var = self.builder.build_float_add(curr_var.into_float_value(), step.float(), "nextvar");
 
                 self.builder.build_store(start_alloca, next_var);
 
-                let end_cond = self.builder.build_float_compare(FloatPredicate::ONE, end_cond, self.context.f64_type().const_float(0.0), "loopcond");
+                let end_cond = self.builder.build_float_compare(FloatPredicate::ONE, end_cond.float(), self.context.f64_type().const_float(0.0), "loopcond");
                 let after_bb = self.context.append_basic_block(parent, "afterloop");
 
                 self.builder.build_conditional_branch(end_cond, loop_bb, after_bb);
@@ -190,14 +209,17 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     self.variables.insert(var_name, val);
                 }
 
-                Ok(self.context.f64_type().const_float(0.0))
+                Ok(BasicValueEnum::FloatValue(self.context.f64_type().const_float(0.0)))
             }
             ExprVal::Number(nb) => {
-                Ok(self.context.f64_type().const_float(nb))
+                if nb % 1.0 == 0.0 {
+                    return Ok(BasicValueEnum::IntValue(self.context.i64_type().const_int(nb as u64, false)))
+                }
+                Ok(BasicValueEnum::FloatValue(self.context.f64_type().const_float(nb)))
             }
             ExprVal::Variable(name) => {
                 match self.variables.get(name.as_str()) {
-                    Some(var) => { Ok(self.builder.build_load(*var, name.as_str()).into_float_value())}
+                    Some(var) => { Ok(self.builder.build_load(*var, name.as_str())) }
                     None => { Err(format!("Unknown variable {}", name))}
                 }
             },
@@ -205,17 +227,17 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 for i in body {
                     self.compile_expr(&i).unwrap();
                 }
-                Ok(self.context.f64_type().const_float(0.0))
+                Ok(BasicValueEnum::FloatValue(self.context.f64_type().const_float(0.0)))
             }
             ExprVal::Return(ret) => {
                 self.builder.build_return(Some(&self.compile_expr(&ret).unwrap()));
-                Ok(self.context.f64_type().const_float(0.0))
+                Ok(BasicValueEnum::FloatValue(self.context.f64_type().const_float(0.0)))
             },
             ExprVal::VarDef {name, val} => {
                 let alloca = self.create_entry_block_alloca(&name);
                 let init_val = match val {
                     Some(init) => self.compile_expr(&init).unwrap(),
-                    None => self.context.f64_type().const_float(0.0),
+                    None => BasicValueEnum::FloatValue(self.context.f64_type().const_float(0.0)),
                 };
                 self.builder.build_store(alloca, init_val);
 
