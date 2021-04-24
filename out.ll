@@ -1,18 +1,19 @@
 ; ModuleID = 'ex.txt'
 source_filename = "ex.txt"
 
-declare double @printd(double)
+declare void @printd(double)
 
-define double @p(double %x) {
+declare void @printi(i64)
+
+define void @pp(double %x, i64 %y) {
 entry:
-  %tmpadd = fadd double %x, 1.000000e+00
-  ret double %tmpadd
+  call void @printd(double %x)
+  call void @printi(i64 %y)
+  ret void
 }
 
-define double @neonmain() {
+define void @neonmain() {
 entry:
-  %tmp = call double @printd(double 2.000000e+00)
-  %tmp1 = call double @p(double 2.000000e+00)
-  %tmp2 = call double @printd(double %tmp1)
-  ret double 1.000000e+00
+  call void @pp(double 9.000000e+00, i64 8)
+  ret void
 }

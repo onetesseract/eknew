@@ -1,4 +1,4 @@
-use crate::{inkwell::builder::Builder, parser::{self, Function}};
+use crate::{inkwell::builder::Builder, parser::{self, Function, Type}};
 use crate::inkwell::context::Context;
 use crate::inkwell::module::Module;
 use crate::inkwell::passes::PassManager;
@@ -31,7 +31,7 @@ impl<'ctx> FloatOr<'ctx> for BasicValueEnum<'ctx> {
         if let BasicValueEnum::FloatValue(x) = &self {
             return *x;
         }
-        panic!("This is not a float!")
+        panic!("This is not a float! ({:?}", &self);
     }
 }
 impl<'a, 'ctx> Compiler<'a, 'ctx> {
@@ -48,7 +48,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
     }
 
     // creates a new alloca (stack alloc) in the entry block of the function
-    fn create_entry_block_alloca(&self, name: &str) -> PointerValue<'ctx> {
+    fn create_entry_block_alloca(&self, name: &str, ty: Type) -> PointerValue<'ctx> {
         let builder = self.context.create_builder();
         let entry = self.fn_value().get_first_basic_block().unwrap();
 
@@ -56,8 +56,12 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             Some(first_instr) => builder.position_before(&first_instr),
             None => builder.position_at_end(entry),
         }
-
-        builder.build_alloca(self.context.f64_type(), name)
+        match ty {
+            Type::F64 => builder.build_alloca(self.context.f64_type(), name),
+            Type::Int => builder.build_alloca(self.context.i64_type(), name),
+            _ => panic!(),
+        }
+        
     }
 
     fn compile_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
@@ -115,7 +119,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                                     _ => panic!("Unhandleable return type {:?}", fun.get_type().get_return_type().unwrap()),
                                 }
                             }
-                            None => Err(String::from("Invalid call produced")),
+                            None => Ok(BasicValueEnum::FloatValue(self.context.f64_type().const_zero())),
                         }
                     }
                     None => Err(format!("Unknown function `{}`", fn_name)),
@@ -162,6 +166,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
                 Ok(phi.as_basic_value())
             }
+            /*
             ExprVal::For { var_name, start, end, step, body } => {
                 let parent = self.fn_value();
 
@@ -210,12 +215,12 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 }
 
                 Ok(BasicValueEnum::FloatValue(self.context.f64_type().const_float(0.0)))
-            }
-            ExprVal::Number(nb) => {
-                if nb % 1.0 == 0.0 {
-                    return Ok(BasicValueEnum::IntValue(self.context.i64_type().const_int(nb as u64, false)))
-                }
+            }*/
+            ExprVal::Float(nb) => {
                 Ok(BasicValueEnum::FloatValue(self.context.f64_type().const_float(nb)))
+            },
+            ExprVal::Int(nb) => {
+                Ok(BasicValueEnum::IntValue(self.context.i64_type().const_int(nb as u64, false)))
             }
             ExprVal::Variable(name) => {
                 match self.variables.get(name.as_str()) {
@@ -230,11 +235,15 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 Ok(BasicValueEnum::FloatValue(self.context.f64_type().const_float(0.0)))
             }
             ExprVal::Return(ret) => {
-                self.builder.build_return(Some(&self.compile_expr(&ret).unwrap()));
+                if ret.is_none() {
+                    self.builder.build_return(None);
+                } else {
+                    self.builder.build_return(Some(&self.compile_expr(&ret.unwrap()).unwrap()));
+                }
                 Ok(BasicValueEnum::FloatValue(self.context.f64_type().const_float(0.0)))
             },
             ExprVal::VarDef {name, val} => {
-                let alloca = self.create_entry_block_alloca(&name);
+                let alloca = self.create_entry_block_alloca(&name, expr.typ.clone());
                 let init_val = match val {
                     Some(init) => self.compile_expr(&init).unwrap(),
                     None => BasicValueEnum::FloatValue(self.context.f64_type().const_float(0.0)),
@@ -250,11 +259,26 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
     }
 
     fn compile_prototype(&self, proto: &parser::Prototype) -> Result<FunctionValue<'ctx>, String> {
-        let ret_type = self.context.f64_type();
-        let args_types = std::iter::repeat(ret_type).take(proto.args.len()).map(|f| f.into()).collect::<Vec<BasicTypeEnum>>();
+        println!("Compiling {:?}", proto);
+        let mut args_types = vec![];
+
+        for i in proto.args.clone() {
+            match i.typ {
+                parser::Type::F64 => args_types.push(BasicTypeEnum::FloatType(self.context.f64_type())),
+                parser::Type::Str => panic!("Unimplemented type str"),
+                parser::Type::Int => args_types.push(BasicTypeEnum::IntType(self.context.i64_type())),
+                parser::Type::Void => panic!("Can't have void value as function param!"),
+                parser::Type::Unknown => panic!("Unknown type"),
+            }
+        }
         let args_types = args_types.as_slice();
 
-        let fn_type = self.context.f64_type().fn_type(args_types, false);
+        let fn_type = match proto.ret_type {
+            parser::Type::F64 => self.context.f64_type().fn_type(args_types, false),
+            parser::Type::Int => self.context.i64_type().fn_type(args_types, false),
+            parser::Type::Void => self.context.void_type().fn_type(args_types, false),
+            _ => panic!("Unknown type"),
+        };
         let fn_val = self.module.add_function(proto.name.as_str(), fn_type, None);
 
         for (i, arg) in fn_val.get_param_iter().enumerate() {
@@ -262,7 +286,11 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 ExprVal::VarDef { name, val: _,} => {name},
                 _ => return Err(format!("You can't have this value ({:?}) as the #{} parameter for a function def", proto.args[i], i)),
             };
-            arg.into_float_value().set_name(&s);
+            match arg {
+                BasicValueEnum::IntValue(_) => arg.into_int_value().set_name(&s),
+                BasicValueEnum::FloatValue(_) => arg.into_float_value().set_name(&s),
+                _ => panic!("Unimplemented type"),
+            }
         }
         Ok(fn_val)
     }
@@ -289,7 +317,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 _ => return Err(format!("You can't have this value ({:?}) as the #{} parameter for a function def", proto.args[i], i)),
             };
 
-            let alloca = self.create_entry_block_alloca(arg_name);
+            let alloca = self.create_entry_block_alloca(arg_name, proto.args[i].typ.clone());
             self.builder.build_store(alloca, arg);
 
             self.variables.insert(arg_name.to_string(), alloca);

@@ -33,10 +33,11 @@ pub enum ExprVal {
         body: Box<Expr>,
     },
 
-    Number(f64),
+    Float(f64),
+    Int(i64),
     Str(String),
     Variable(String),
-    Return(Box<Expr>),
+    Return(Option<Box<Expr>>),
     Function(Box<Function>),
 
     Block {
@@ -75,6 +76,7 @@ pub struct Expr {
 pub struct Prototype {
     pub name: String,
     pub args: Vec<Expr>,
+    pub ret_type: Type,
 }
 
 //defines a user-defined or extern function
@@ -173,7 +175,7 @@ impl<'a> Parser<'a> {
             -1
         }
     }
-
+    /*
     fn parse_prototype(&mut self) -> Result<Prototype, &'static str> {
         let (id, is_operator, precedence) = match self.curr() {
             Token::Ident(id) => {
@@ -191,7 +193,10 @@ impl<'a> Parser<'a> {
 
                 name.push(op);
 
-                let prec = if let Token::Number(prec) = self.curr() {
+                let prec = if let Token::Float(prec) = self.curr() {
+                    self.advance().check(self.lexer.clone());
+                    prec as usize
+                } else if let Token::Int(prec) = self.curr() {
                     self.advance().check(self.lexer.clone());
                     prec as usize
                 } else {
@@ -287,6 +292,7 @@ impl<'a> Parser<'a> {
             is_anon: false,
         })
     }
+    */
 
     fn parse_expr(&mut self) -> Result<Expr, String> {
         match self.parse_unary_expr() {
@@ -297,9 +303,13 @@ impl<'a> Parser<'a> {
 
     fn parse_nb_expr(&mut self) -> Result<Expr, String> {
         match self.curr() {
-            Token::Number(nb) => {
+            Token::Float(nb) => {
                 self.advance();
-                Ok(Expr {typ: Type::F64, ex: ExprVal::Number(nb)})
+                Ok(Expr {typ: Type::F64, ex: ExprVal::Float(nb)})
+            },
+            Token::Int(nb) => {
+                self.advance();
+                Ok(Expr {typ: Type::Int, ex: ExprVal::Int(nb)})
             },
             _ => Err(format!("Expected number literal (got {:?})", self.curr()))
         }
@@ -350,7 +360,10 @@ impl<'a> Parser<'a> {
         if self.advance().is_err() {
             return Err(String::from("Expected return, got err advancing"));
         }
-        return Ok(Expr { typ: Type::Void, ex: ExprVal::Return(Box::new(self.parse_expr().unwrap()))})
+        if self.clone().parse_expr().is_err() {
+            return Ok(Expr { typ: Type::Void, ex: ExprVal::Return(None)})
+        }
+        return Ok(Expr { typ: Type::Void, ex: ExprVal::Return(Some(Box::new(self.parse_expr().unwrap())))})
     }
 
     fn parse_id_expr(&mut self) -> Result<Expr, String> {
@@ -373,6 +386,7 @@ impl<'a> Parser<'a> {
                     "f64" => Type::F64,
                     "str" => Type::Str,
                     "int" => Type::Int,
+                    "void" => Type::Void,
                     _ => return Err(format!("Unknown type {:?}", self.curr())),
                 };
                 if self.advance().is_err() {
@@ -397,6 +411,7 @@ impl<'a> Parser<'a> {
                             "f64" => Type::F64,
                             "str" => Type::Str,
                             "int" => Type::Int,
+                            "void" => Type::Void,
                             _ => return Ok(Expr { typ: self.type_of_call(ExprVal::Call { fn_name: id.clone(), args: vec![] }).unwrap(), ex: ExprVal::Call { fn_name: id, args: vec![] }}),
                         };
                         self.advance().check(self.lexer.clone());
@@ -405,7 +420,7 @@ impl<'a> Parser<'a> {
                             let p = Prototype {
                                 name: id,
                                 args: vec![],
-                                
+                                ret_type: t.clone(),
                             };
 
                             let f = Function {
@@ -423,7 +438,7 @@ impl<'a> Parser<'a> {
                         }
                         let b = self.parse_block().unwrap();
 
-                        let p = Prototype { name: id, args: vec![], };
+                        let p = Prototype { name: id, args: vec![], ret_type: t};
                         let f = Function { prototype: p, body: Some(b), is_anon: false };
 
                         return Ok(Expr { typ: Type::Void, ex: ExprVal::Function(Box::new(f))});
@@ -462,7 +477,7 @@ impl<'a> Parser<'a> {
                             let p = Prototype {
                                 name: id,
                                 args: args,
-                                
+                                ret_type: t.clone(),
                             };
 
                             let f = Function {
@@ -480,7 +495,7 @@ impl<'a> Parser<'a> {
                         }
                         let b = self.parse_block().unwrap();
 
-                        let p = Prototype { name: id, args: args, };
+                        let p = Prototype { name: id, args: args, ret_type: t};
                         let f = Function { prototype: p, body: Some(b), is_anon: false };
 
                         return Ok(Expr { typ: Type::Void, ex: ExprVal::Function(Box::new(f))});
@@ -633,7 +648,7 @@ impl<'a> Parser<'a> {
     fn parse_primary(&mut self) -> Result<Expr, String> {
         match self.curr() {
             Token::Ident(_) => self.parse_id_expr(),
-            Token::Number(_) => self.parse_nb_expr(),
+            Token::Int(_) | Token::Float(_) => self.parse_nb_expr(),
             Token::Str(_) => self.parse_str_expr(),
             Token::LParen => self.parse_paren_expr(),
             Token::LBrace => self.parse_block(),
@@ -642,7 +657,7 @@ impl<'a> Parser<'a> {
             _ => {
                 let s = format!("I don't know how to parse {:?}", self.curr());
                 let l = LexError::with_index(s, self.pos);
-                panic!("{}", l.err(self.lexer.clone()))
+                return Err(l.err(self.lexer.clone()));
             },
         }
     }
@@ -652,32 +667,11 @@ impl<'a> Parser<'a> {
         match self.parse_expr() {
             Ok(expr) => {
                 match expr.ex.clone() {
-                    ExprVal::Function(fun) => {
-                        return Ok(Function {
-                            prototype: fun.prototype,
-                            body: fun.body,
-                            is_anon: false,
-                        })
+                    ExprVal::Function(f) => {
+                        Ok(*f)
                     }
-                    ExprVal::VarDef { name, val } => {}
-                    x => return Ok(Function {
-                                    prototype: Prototype {
-                                        name: crate::consts::ANONYMOUS_FUNCTION_NAME.to_string(),
-                                        args: vec![],
-                
-                                    },
-                                    body: Some(expr),
-                                    is_anon: true
-                                })
+                    x => Err(format!("Cannot parse this as a top-level def (can only parse functions!) (got {:?})", x))
                 }
-                Ok(Function {
-                    prototype: Prototype {
-                        name: crate::consts::ANONYMOUS_FUNCTION_NAME.to_string(),
-                        args: vec![],
-                    },
-                    body: Some(expr),
-                    is_anon: true,
-                })
             },
             Err(err) => Err(err),
         }

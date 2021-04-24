@@ -16,7 +16,8 @@ pub enum Token {
     If,
 //    In,
     LParen,
-    Number(f64),
+    Float(f64),
+    Int(i64),
     Str(String),
     Op(char),
     RParen,
@@ -70,8 +71,8 @@ impl<'a> LexError {
                 _ => { col += 1; mypos += 1} ,
             }
         }*/
-        println!("{}", l.input.matches('\n').count());
-        println!("{}", l.name);
+        //println!("{}", l.input.matches('\n').count());
+        //println!("{}", l.name);
         format!("{}:{}:{} {}", l.name, line, col, self.error)
     }
     pub fn with_index(msg: String, index: usize) -> LexError {
@@ -147,7 +148,8 @@ impl <'a> Lexer<'a> {
         }
 
         pos += 1;
-
+        //println!("{:?},, {},, {:?}", next, pos, src.chars().nth(pos));
+        println!("NEXT: {:?}", next);
         let result = match next.unwrap() {
             '(' => Ok(Token::LParen),
             ')' => Ok(Token::RParen),
@@ -168,12 +170,14 @@ impl <'a> Lexer<'a> {
             },
 
             '.' | '0' ..= '9' => {
+                //println!("{:?}", src[start..pos].to_string());
                 loop {
                     let ch = match chars.peek() {
                         Some(ch) => *ch,
-                        None => break,
+                        None => return Ok(Token::EOF)
                     };
 
+                    // Parse float.
                     if ch != '.' && !ch.is_digit(16) {
                         break;
                     }
@@ -181,8 +185,12 @@ impl <'a> Lexer<'a> {
                     chars.next();
                     pos += 1;
                 }
-
-                Ok(Token::Number(src[start..pos].parse().unwrap()))
+                //println!("{:?}", src[start..pos].parse::<String>());
+                if src[start..pos].contains('.') {
+                    Ok(Token::Float(src[start..pos].parse().unwrap()))
+                } else {
+                    Ok(Token::Int(src[start..pos].parse().unwrap()))
+                }
             },
 
             'a' ..= 'z' | 'A' ..= 'Z' | '_' => {

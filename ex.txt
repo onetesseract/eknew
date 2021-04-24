@@ -1,14 +1,14 @@
-printd(x f64) f64
+printd(x f64) void
+printi(x int) void
 
-printi(x int) int
-
-p(x f64) f64 {
-    return x + 1.0
+pp(x f64, y int) void {
+    printd(x)
+    printi(y)
+    return
 }
-
-neonmain() f64 {
-    printd(2.0)
-    printd(p(2.0))
-
-    return 1.0
+neonmain() void {
+    i f64 = 9.0
+    y int = 8
+    pp(i, y)
+    return
 }

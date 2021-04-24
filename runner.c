@@ -2,9 +2,11 @@
 
 double neonmain();
 
-double printd(double d) {
+void printd(double d) {
     printf("%f\n", d);
-    return 1;
+}
+void printi(int i) {
+    printf("%i", i);
 }
 int main() {
     neonmain();

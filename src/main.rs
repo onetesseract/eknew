@@ -3,6 +3,7 @@ use std::io::Write;
 
 use compiler::Compiler;
 use inkwell::{context::Context, passes::PassManager};
+use lexer::Lexer;
 use parser::Parser;
 
 extern crate inkwell;
@@ -39,7 +40,6 @@ pub extern fn printd(x: f64) -> f64 {
 // adding the functions above to a global array so rust won't remove them
 #[used]
 static EXT_FNS: [extern fn(f64) -> f64; 2] = [putchard, printd];
-
 
 fn main() {
     let mut prec: std::collections::HashMap<char, i32> = std::collections::HashMap::new();
