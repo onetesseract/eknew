@@ -1,9 +1,7 @@
 use std::fs;
-use std::io::Write;
-
+use std::collections::HashMap;
 use compiler::Compiler;
 use inkwell::{context::Context, passes::PassManager};
-use lexer::Lexer;
 use parser::Parser;
 
 extern crate inkwell;
@@ -11,35 +9,6 @@ extern crate inkwell;
 mod lexer;
 mod parser;
 mod compiler;
-
-mod consts {
-    pub const ANONYMOUS_FUNCTION_NAME: &str = "anonymous";
-}
-
-// macro used to print & flush without printing a new line
-macro_rules! print_flush {
-    ( $( $x:expr ),* ) => {
-        print!( $($x, )* );
-
-        std::io::stdout().flush().expect("Could not flush to standard output.");
-    };
-}
-
-#[no_mangle]
-pub extern fn putchard(x: f64) -> f64 {
-    print_flush!("{}", x as u8 as char);
-    x
-}
-
-#[no_mangle]
-pub extern fn printd(x: f64) -> f64 {
-    println!("{}", x);
-    x
-}
-
-// adding the functions above to a global array so rust won't remove them
-#[used]
-static EXT_FNS: [extern fn(f64) -> f64; 2] = [putchard, printd];
 
 fn main() {
     let mut prec: std::collections::HashMap<char, i32> = std::collections::HashMap::new();
@@ -94,6 +63,12 @@ fn main() {
 
     let mut exprs = vec![];
 
+    let mut structs = HashMap::new();
+
+    let mut struct_forms_keys = vec![];
+
+    let mut struct_forms = vec![];
+
     loop {
         if p.at_end() {
             break;
@@ -106,7 +81,7 @@ fn main() {
     }
 
     for i in exprs {
-        Compiler::compile(&context, &builder, &fpm, &module, &i).unwrap();
+        Compiler::compile(&context, &builder, &fpm, &module, &i, &mut structs, &mut struct_forms_keys, &mut struct_forms).unwrap();
     }
 
     module.print_to_file("out.ll").unwrap();

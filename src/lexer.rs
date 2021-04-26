@@ -20,6 +20,7 @@ pub enum Token {
     Int(i64),
     Str(String),
     Op(char),
+    Dot,
     RParen,
     LBrace, // {
     RBrace,
@@ -156,6 +157,7 @@ impl <'a> Lexer<'a> {
             '{' => Ok(Token::LBrace),
             '}' => Ok(Token::RBrace),
             ',' => Ok(Token::Comma),
+            '.' => Ok(Token::Dot),
             '#' => {
                 // tis a comment
                 loop {
@@ -169,7 +171,7 @@ impl <'a> Lexer<'a> {
                 Ok(Token::Comment)
             },
 
-            '.' | '0' ..= '9' => {
+            '0' ..= '9' => {
                 //println!("{:?}", src[start..pos].to_string());
                 loop {
                     let ch = match chars.peek() {

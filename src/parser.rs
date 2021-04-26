@@ -33,6 +33,8 @@ pub enum ExprVal {
         body: Box<Expr>,
     },
 
+    StructDef(Struct),
+
     Float(f64),
     Int(i64),
     Str(String),
@@ -42,6 +44,11 @@ pub enum ExprVal {
 
     Block {
         body: Vec<Expr>,
+    },
+
+    SubAccess { // parent.sub
+        parent: String,
+        sub: Box<Expr>,
     },
 
     VarDef {
@@ -63,6 +70,7 @@ pub enum Type {
     Int,
     Void,
     Unknown,
+    Struct(String),
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +95,17 @@ pub struct Function {
     pub is_anon: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct Struct {
+    pub name: String,
+    pub members: Vec<Expr>,
+}
+
+#[derive(Debug, Clone)]
+pub enum TopLevelExpr {
+    Struct(Struct),
+    Function(Function),
+}
 // represents the Expr parser
 #[derive(Clone)]
 pub struct Parser<'a> {
@@ -94,6 +113,8 @@ pub struct Parser<'a> {
     lexer: crate::lexer::Lexer<'a>,
     pos: usize,
     prec: HashMap<char, i32>,
+
+    structs: Vec<String>,
 }
 
 impl std::fmt::Display for ParserError {
@@ -127,6 +148,7 @@ impl<'a> Parser<'a> {
             lexer: Lexer::new(input, file_name),
             prec: op_precedence,
             pos: 0,
+            structs: vec![],
         }
     }
 
@@ -366,7 +388,7 @@ impl<'a> Parser<'a> {
         return Ok(Expr { typ: Type::Void, ex: ExprVal::Return(Some(Box::new(self.parse_expr().unwrap())))})
     }
 
-    fn parse_id_expr(&mut self) -> Result<Expr, String> {
+    fn parse_id_expr(&mut self) -> Result<Expr, String> { // too big, needs rewrite
         let id = match self.curr() {
             Token::Ident(id) => id,
             _ => return Err(format!("Expected id (got {:?}", self.curr())),
@@ -387,7 +409,7 @@ impl<'a> Parser<'a> {
                     "str" => Type::Str,
                     "int" => Type::Int,
                     "void" => Type::Void,
-                    _ => return Err(format!("Unknown type {:?}", self.curr())),
+                    i => { if self.structs.contains(&i.to_string()) { Type::Struct(i.to_string())} else {return Err(format!("Unknown type {:?}", self.curr()))}}
                 };
                 if self.advance().is_err() {
                     return Ok(Expr {typ: t, ex: ExprVal::VarDef { name: id, val: None}});
@@ -412,7 +434,7 @@ impl<'a> Parser<'a> {
                             "str" => Type::Str,
                             "int" => Type::Int,
                             "void" => Type::Void,
-                            _ => return Ok(Expr { typ: self.type_of_call(ExprVal::Call { fn_name: id.clone(), args: vec![] }).unwrap(), ex: ExprVal::Call { fn_name: id, args: vec![] }}),
+                            i => { if self.structs.contains(&i.to_string()) { Type::Struct(i.to_string())} else {return Ok(Expr { typ: self.type_of_call(ExprVal::Call { fn_name: id.clone(), args: vec![] }).unwrap(), ex: ExprVal::Call { fn_name: id, args: vec![] }})} }
                         };
                         self.advance().check(self.lexer.clone());
                         if !matches!(self.curr(), Token::LBrace) {
@@ -466,6 +488,8 @@ impl<'a> Parser<'a> {
                         "str" => Some(Type::Str),
                         "int" => Some(Type::Int),
                         "void" => Some(Type::Void),
+                        i => { if self.structs.contains(&i.to_string()) { Some(Type::Struct(i.to_string()))} else {None}}
+
                         _ => None,
                     };
                     if t.is_some() {
@@ -504,6 +528,36 @@ impl<'a> Parser<'a> {
                 }
                 Ok(Expr { typ: self.type_of_call(ExprVal::Call {fn_name: id.clone(), args: args.clone()}).unwrap(), ex: ExprVal::Call {fn_name: id, args: args}})
             },
+
+            Token::LBrace => {
+                self.advance().check(self.lexer.clone());
+                if let Token::RBrace = self.curr() {
+                    self.advance().check(self.lexer.clone());
+                    return Ok(Expr {typ: Type::Unknown, ex: ExprVal::StructDef(Struct {name: id, members: vec![]})})
+                }
+                let mut members = vec![];
+                loop {
+                    if let Token::RBrace = self.curr() {
+                        break;
+                    }
+                    let e = self.parse_expr().unwrap();
+                    match e.ex {
+                        ExprVal::VarDef { .. } => {
+                            members.push(e);
+                        }
+                        x => return Err(format!("Cannot use {:?} as a vardef in a struct def", x))
+                    }
+                }
+                self.advance().check(self.lexer.clone());
+                self.structs.push(id.clone());
+                Ok(Expr {typ: Type::Unknown, ex: ExprVal::StructDef(Struct{name: id, members: members})})
+            }
+            Token::Dot => {
+                self.advance().check(self.lexer.clone());
+                let sub = self.parse_id_expr().unwrap();
+                Ok(Expr {typ: Type::Unknown, ex: ExprVal::SubAccess {parent: id, sub: Box::new(sub)}})
+            }
+
             _ => Ok(Expr {typ: self.type_of_var(id.clone()).unwrap(), ex: ExprVal::Variable(id)})
         }
     }
@@ -663,13 +717,16 @@ impl<'a> Parser<'a> {
     }
 
 
-    pub fn parse_toplevel_expr(&mut self) -> Result<Function, String> {
+    pub fn parse_toplevel_expr(&mut self) -> Result<TopLevelExpr, String> {
         match self.parse_expr() {
             Ok(expr) => {
                 match expr.ex.clone() {
                     ExprVal::Function(f) => {
-                        Ok(*f)
+                        Ok(TopLevelExpr::Function(*f))
                     }
+                    ExprVal::StructDef(s) => {
+                        Ok(TopLevelExpr::Struct(s))
+                    },
                     x => Err(format!("Cannot parse this as a top-level def (can only parse functions!) (got {:?})", x))
                 }
             },

@@ -1,3 +1,5 @@
+use inkwell::types::{PointerType, StructType};
+use inkwell::types::BasicType;
 use crate::{inkwell::builder::Builder, parser::{self, Function, Type}};
 use crate::inkwell::context::Context;
 use crate::inkwell::module::Module;
@@ -6,7 +8,7 @@ use crate::inkwell::types::BasicTypeEnum;
 use crate::inkwell::values::{BasicValue, BasicValueEnum, FloatValue, FunctionValue, PointerValue};
 use crate::inkwell::FloatPredicate;
 
-use std::{borrow::Borrow, collections::HashMap};
+use std::{borrow::Borrow, collections::HashMap, str};
 
 use crate::parser::Expr;
 use crate::parser::ExprVal;
@@ -16,7 +18,13 @@ pub struct Compiler<'a, 'ctx> {
     pub builder: &'a Builder<'ctx>,
     pub fpm: &'a PassManager<FunctionValue<'ctx>>,
     pub module: &'a Module<'ctx>,
-    pub function: &'a Function,
+    pub function: Option<&'a Function>,
+    pub _struct: Option<&'a parser::Struct>,
+
+    pub structs: &'a mut HashMap<String, StructType<'ctx>>,
+
+    pub struct_forms_keys: &'a mut Vec<PointerType<'ctx>>,
+    pub struct_forms: &'a mut Vec<Vec<String>>,
 
     variables: std::collections::HashMap<String, PointerValue<'ctx>>,
     fn_value_opt: Option<FunctionValue<'ctx>>,
@@ -34,6 +42,7 @@ impl<'ctx> FloatOr<'ctx> for BasicValueEnum<'ctx> {
         panic!("This is not a float! ({:?}", &self);
     }
 }
+
 impl<'a, 'ctx> Compiler<'a, 'ctx> {
     // gets a function given name
     #[inline]
@@ -59,44 +68,63 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         match ty {
             Type::F64 => builder.build_alloca(self.context.f64_type(), name),
             Type::Int => builder.build_alloca(self.context.i64_type(), name),
+            Type::Struct(s) => {
+                if !self.structs.contains_key(&s) {
+                    panic!();
+                }
+                let b = self.structs.get(&s).unwrap().as_basic_type_enum();
+                builder.build_alloca(b, name)
+            }
             _ => panic!(),
         }
         
     }
 
-    fn compile_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+    fn compile_expr(&mut self, expr: &Expr) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         match expr.ex.clone() {
             ExprVal::Binary { op, left, right } => {
                 if op == '=' {
+                    if let ExprVal::SubAccess { parent, sub} = left.ex.borrow() {
+                        if let ExprVal::Variable(s) = &sub.ex {
+                            let v = self.variables.get(parent).expect("Undefined variable");
+                            let idx = self.struct_forms[self.struct_forms_keys.iter().position(|&x| x == v.get_type()).expect("Unknown struct")].iter().position(|x| x == s).expect("Could not find struct member");
+                            let s = self.builder.build_struct_gep(*v, idx as u32, &s).unwrap();
+                            self.builder.build_store(s, self.compile_expr(&right).unwrap().expect("Cannot use this as non-void"));
+                            return Ok(None)
+                        } else { panic!(); }
+                    }
                     let var_name = match left.ex.borrow() {
                         ExprVal::Variable(name) => name,
                         _ => return Err(format!("Expected variable name as left-hand side of assignment (cannot assign to {:?})", left)),
                     };
-                    let var_val = self.compile_expr(&right)?;
+                    let var_val = self.compile_expr(&right).unwrap().expect("Cannot use this as non-void");
                     let var = self.variables.get(var_name.as_str()).ok_or(format!("Undefined variable `{}`", var_name))?;
 
                     self.builder.build_store(*var, var_val);
 
-                    return Ok(var_val);
+                    return Ok(None);
 
                 } else {
                     let lhs = self.compile_expr(&left)?;
                     let rhs = self.compile_expr(&right)?;
 
                     match op {
-                        '+' => Ok(BasicValueEnum::FloatValue(self.builder.build_float_add(lhs.float(), rhs.float(), "tmpadd"))),
-                        '-' => Ok(BasicValueEnum::FloatValue(self.builder.build_float_sub(lhs.float(), rhs.float(), "tmpsub"))),
-                        '*' => Ok(BasicValueEnum::FloatValue(self.builder.build_float_mul(lhs.float(), rhs.float(), "tmpmul"))),
-                        '/' => Ok(BasicValueEnum::FloatValue(self.builder.build_float_div(lhs.float(), rhs.float(), "tmpdiv"))),
+                        '+' => {
+                                let p = self.builder.build_float_add(lhs.to_owned().unwrap().float(), rhs.to_owned().unwrap().float(), "tmpadd");
+                                Ok(Some(BasicValueEnum::FloatValue(p)))
+                        }
+                        '-' => Ok(Some(BasicValueEnum::FloatValue(self.builder.build_float_sub(lhs.expect("Cannot use this as non-void").float(), rhs.expect("Cannot use this as non-void").float(), "tmpsub")))),
+                        '*' => Ok(Some(BasicValueEnum::FloatValue(self.builder.build_float_mul(lhs.expect("Cannot use this as non-void").float(), rhs.expect("Cannot use this as non-void").float(), "tmpmul")))),
+                        '/' => Ok(Some(BasicValueEnum::FloatValue(self.builder.build_float_div(lhs.expect("Cannot use this as non-void").float(), rhs.expect("Cannot use this as non-void").float(), "tmpdiv")))),
                         '<' => {
-                            let cmp = self.builder.build_float_compare(FloatPredicate::ULT, lhs.float(), rhs.float(), "tmpcmp");
+                            let cmp = self.builder.build_float_compare(FloatPredicate::ULT, lhs.expect("Cannot use this as non-void").float(), rhs.expect("Cannot use this as non-void").float(), "tmpcmp");
 
-                            Ok(BasicValueEnum::FloatValue(self.builder.build_unsigned_int_to_float(cmp, self.context.f64_type(), "tmpbool")))
+                            Ok(Some(BasicValueEnum::FloatValue(self.builder.build_unsigned_int_to_float(cmp, self.context.f64_type(), "tmpbool"))))
                         }
                         '>' => {
-                            let cmp = self.builder.build_float_compare(FloatPredicate::ULT, rhs.float(), lhs.float(), "tmpcmp");
+                            let cmp = self.builder.build_float_compare(FloatPredicate::ULT, rhs.expect("Cannot use this as non-void").float(), lhs.expect("Cannot use this as non-void").float(), "tmpcmp");
 
-                            Ok(BasicValueEnum::FloatValue(self.builder.build_unsigned_int_to_float(cmp, self.context.f64_type(), "tmpbool")))
+                            Ok(Some(BasicValueEnum::FloatValue(self.builder.build_unsigned_int_to_float(cmp, self.context.f64_type(), "tmpbool"))))
                         }
                         _ => Err(format!("Undefined operator `{}`", op)),
                     }
@@ -109,17 +137,27 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                         for arg in args {
                             comp_args.push(self.compile_expr(&arg)?);
                         }
-                        let argsv: Vec<BasicValueEnum> = comp_args.iter().by_ref().map(|&val| val.into()).collect();
+                        let argsv: Vec<BasicValueEnum> = comp_args.iter().by_ref().map(|&val| val.expect("Cannot use this as non-void").into()).collect();
                         match self.builder.build_call(fun, argsv.as_slice(), "tmp").try_as_basic_value().left() {
                             Some(value) => {
-                                match fun.get_type().get_return_type().unwrap() {
-                                    BasicTypeEnum::FloatType(_) => {
-                                        Ok(BasicValueEnum::FloatValue(value.into_float_value()))
+                                match fun.get_type().get_return_type() {
+                                    Some(x) => match x {
+                                        BasicTypeEnum::FloatType(_) => {
+                                            Ok(Some(BasicValueEnum::FloatValue(value.into_float_value())))
+                                        },
+                                        BasicTypeEnum::IntType(_) => {
+                                            Ok(Some(BasicValueEnum::IntValue(value.into_int_value())))
+                                        },
+                                        _ => panic!("Unhandleable return type {:?}", fun.get_type().get_return_type().unwrap()),
+                                    },
+                                    None => {
+                                        Ok(None)
                                     }
-                                    _ => panic!("Unhandleable return type {:?}", fun.get_type().get_return_type().unwrap()),
+                                    
+                                   
                                 }
                             }
-                            None => Ok(BasicValueEnum::FloatValue(self.context.f64_type().const_zero())),
+                            None => Ok(None),
                         }
                     }
                     None => Err(format!("Unknown function `{}`", fn_name)),
@@ -131,7 +169,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
                 // create condition by comparing with 0.0 and returning an int
                 let cond = self.compile_expr(&cond)?;
-                let cond = self.builder.build_float_compare(FloatPredicate::ONE, cond.float(), zero_const, "ifcond");
+                let cond = self.builder.build_float_compare(FloatPredicate::ONE, cond.expect("Cannot use this as non-void").float(), zero_const, "ifcond");
 
                 // build branches
                 let then_bb = self.context.append_basic_block(parent, "then");
@@ -142,14 +180,14 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
                 // build then block
                 self.builder.position_at_end(then_bb);
-                let then_val = self.compile_expr(&consequence)?;
+                let then_val = self.compile_expr(&consequence).unwrap().expect("Cannot use this as non-void");
                 self.builder.build_unconditional_branch(cont_bb);
 
                 let then_bb = self.builder.get_insert_block().unwrap();
 
                 // build else block
                 self.builder.position_at_end(else_bb);
-                let else_val = self.compile_expr(&alternative)?;
+                let else_val = self.compile_expr(&alternative).unwrap().expect("Cannot use this as non-void");
                 self.builder.build_unconditional_branch(cont_bb);
 
                 let else_bb = self.builder.get_insert_block().unwrap();
@@ -164,7 +202,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     (&else_val, else_bb)
                 ]);
 
-                Ok(phi.as_basic_value())
+                Ok(Some(phi.as_basic_value())) // Should maybe be Ok(None)?
             }
             /*
             ExprVal::For { var_name, start, end, step, body } => {
@@ -217,38 +255,48 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 Ok(BasicValueEnum::FloatValue(self.context.f64_type().const_float(0.0)))
             }*/
             ExprVal::Float(nb) => {
-                Ok(BasicValueEnum::FloatValue(self.context.f64_type().const_float(nb)))
+                Ok(Some(BasicValueEnum::FloatValue(self.context.f64_type().const_float(nb))))
             },
             ExprVal::Int(nb) => {
-                Ok(BasicValueEnum::IntValue(self.context.i64_type().const_int(nb as u64, false)))
+                Ok(Some(BasicValueEnum::IntValue(self.context.i64_type().const_int(nb as u64, false))))
             }
             ExprVal::Variable(name) => {
                 match self.variables.get(name.as_str()) {
-                    Some(var) => { Ok(self.builder.build_load(*var, name.as_str())) }
+                    Some(var) => { Ok(Some(self.builder.build_load(*var, name.as_str()))) }
                     None => { Err(format!("Unknown variable {}", name))}
                 }
             },
+            ExprVal::SubAccess {parent, sub} => {
+                if let ExprVal::Variable(s) = sub.ex {
+                    let v = self.variables.get(&parent).expect("Undefined variable");
+                    let idx = self.struct_forms[self.struct_forms_keys.iter().position(|&x| x == v.get_type()).expect("Unknown struct")].iter().position(|x| x == &s).expect("Could not find struct member");
+                    let s = self.builder.build_struct_gep(*v, idx as u32, &s).unwrap();
+                    Ok(Some(self.builder.build_load(s, &parent)))
+                } else {panic!();}
+            }
             ExprVal::Block { body } => {
                 for i in body {
                     self.compile_expr(&i).unwrap();
                 }
-                Ok(BasicValueEnum::FloatValue(self.context.f64_type().const_float(0.0)))
+                Ok(Some(BasicValueEnum::FloatValue(self.context.f64_type().const_float(0.0))))
             }
             ExprVal::Return(ret) => {
                 if ret.is_none() {
                     self.builder.build_return(None);
                 } else {
-                    self.builder.build_return(Some(&self.compile_expr(&ret.unwrap()).unwrap()));
+                    self.builder.build_return(Some(&self.compile_expr(&ret.unwrap()).unwrap().expect("Cannot use this as non-void")));
                 }
-                Ok(BasicValueEnum::FloatValue(self.context.f64_type().const_float(0.0)))
+                Ok(None)
             },
             ExprVal::VarDef {name, val} => {
                 let alloca = self.create_entry_block_alloca(&name, expr.typ.clone());
                 let init_val = match val {
                     Some(init) => self.compile_expr(&init).unwrap(),
-                    None => BasicValueEnum::FloatValue(self.context.f64_type().const_float(0.0)),
+                    None => None,
                 };
-                self.builder.build_store(alloca, init_val);
+                if init_val.is_some() {
+                    self.builder.build_store(alloca, init_val.unwrap());
+                }
 
                 self.variables.insert(name, alloca);
 
@@ -268,7 +316,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 parser::Type::Str => panic!("Unimplemented type str"),
                 parser::Type::Int => args_types.push(BasicTypeEnum::IntType(self.context.i64_type())),
                 parser::Type::Void => panic!("Can't have void value as function param!"),
-                parser::Type::Unknown => panic!("Unknown type"),
+                _ => panic!("Unknown type"),
             }
         }
         let args_types = args_types.as_slice();
@@ -296,11 +344,11 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
     }
 
     fn compile_fn(&mut self) -> Result<FunctionValue<'ctx>, String> {
-        let proto = &self.function.prototype;
+        let proto = &self.function.unwrap().prototype;
         // println!("Compiling fn with proto {:?}", proto);
         let function = self.compile_prototype(proto).unwrap();
 
-        if self.function.body.is_none() {
+        if self.function.unwrap().body.is_none() {
             // println!("None body");
             return Ok(function);
         }
@@ -327,7 +375,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         }
         // compile body
         // println!("Body: {:?}", self.function.body);
-        if let ExprVal::Block { body }  = self.function.body.clone().unwrap().ex {
+        if let ExprVal::Block { body }  = self.function.unwrap().body.clone().unwrap().ex {
             //println!("Here");
             for i in body {
                 //println!("Compiling from fn {:?}", i);
@@ -336,8 +384,8 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         } else {
             // println!("Expected block for fn definition (got {:?})", self.function.body.clone().unwrap());
             // return Err(format!("Expected block for fn definition (got {:?})", self.function.body.clone().unwrap()))
-            let b = self.compile_expr(&self.function.body.clone().unwrap()).unwrap();
-            self.builder.build_return(Some(&b));
+            let b = self.compile_expr(&self.function.unwrap().body.clone().unwrap()).unwrap();
+            self.builder.build_return(Some(&b.expect("Cannot use this as non-void")));
         }
         
         // self.builder.build_return(Some(&self.context.f64_type().const_float(0.0)));
@@ -361,24 +409,83 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         }
     }
 
+    fn compile_struct(&mut self) -> Result<StructType<'ctx>, String> {
+        let mut forms = vec![];
+        let mut types = vec![];
+        let s = self._struct.unwrap();
+        for i in s.members.clone() {
+            match i.typ {
+                Type::F64 => types.push(BasicTypeEnum::FloatType(self.context.f64_type())),
+                Type::Int => types.push(BasicTypeEnum::IntType(self.context.i64_type())),
+                _ => panic!(),
+            }
+            if let ExprVal::VarDef {name, ..} = i.ex {
+                forms.push(name);
+            }
+        }
+        let _s = self.context.struct_type(types.as_slice(), false);
+        self.structs.insert(s.name.clone(), _s);
+        //self.struct_forms.insert(_s, forms);
+        self.struct_forms_keys.push(_s.ptr_type(inkwell::AddressSpace::Generic));
+        self.struct_forms.push(forms);
+        println!("{:?}", _s);
+        Ok(_s)
+    }
+
     // compile
     pub fn compile(
         context: &'ctx Context,
         builder: &'a Builder<'ctx>,
         pass_manager: &'a PassManager<FunctionValue<'ctx>>,
         module: &'a Module<'ctx>,
-        function: &Function,
-    ) -> Result<FunctionValue<'ctx>, String> {
-        let mut compiler = Compiler {
-            context: context,
-            builder: builder,
-            fpm: pass_manager,
-            module: module,
-            function: function,
-            variables: HashMap::new(),
-            fn_value_opt: None,
-        };
+        expr: &parser::TopLevelExpr,
+        structs: &mut HashMap<String, StructType<'ctx>>,
+        struct_forms: &mut Vec<Vec<String>>,
+        struct_forms_keys: &mut Vec<PointerType<'ctx>>,
+    ) -> Result<Returnable<'ctx>, String> {
+        match expr {
+            parser::TopLevelExpr::Struct(s) => {
+                let mut compiler = Compiler {
+                    context: context,
+                    builder: builder,
+                    fpm: pass_manager,
+                    module: module,
+                    function: None,
+                    _struct: Some(s),
+                    variables: HashMap::new(),
+                    fn_value_opt: None,
+                    structs: structs,
+                    struct_forms: struct_forms,
+                    struct_forms_keys: struct_forms_keys,
 
-        compiler.compile_fn()
+                };
+        
+                Ok(Returnable::StructType(compiler.compile_struct().unwrap()))
+            }
+            parser::TopLevelExpr::Function(f) => {
+                let mut compiler = Compiler {
+                    context: context,
+                    builder: builder,
+                    fpm: pass_manager,
+                    module: module,
+                    function: Some(f),
+                    _struct: None,
+                    variables: HashMap::new(),
+                    fn_value_opt: None,
+                    structs: structs,
+                    struct_forms: struct_forms,
+                    struct_forms_keys: struct_forms_keys,
+                };
+        
+                Ok(Returnable::FunctionValue(compiler.compile_fn().unwrap()))
+            }
+        }
+        
     }
+}
+
+//todo: order
+pub enum Returnable<'ctx> {
+    FunctionValue(FunctionValue<'ctx>),
+    StructType(StructType<'ctx>),
 }

@@ -1,8 +1,4 @@
-p(x f64) f64 {
-    if(x > 3) {
-        y f64 = 2
-    } else {
-        y f64 = 6
-    }
-    return y
+f {
+    x int
+    y f64
 }

@@ -12,8 +12,14 @@ entry:
   ret void
 }
 
+define i64 @v(double %x) {
+entry:
+  ret i64 1
+}
+
 define void @neonmain() {
 entry:
-  call void @pp(double 9.000000e+00, i64 8)
+  call void @printi(i64 9)
+  call void @printd(double 9.800000e+00)
   ret void
 }
