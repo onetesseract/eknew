@@ -267,12 +267,31 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 }
             },
             ExprVal::SubAccess {parent, sub} => {
-                if let ExprVal::Variable(s) = sub.ex {
-                    let v = self.variables.get(&parent).expect("Undefined variable");
-                    let idx = self.struct_forms[self.struct_forms_keys.iter().position(|&x| x == v.get_type()).expect("Unknown struct")].iter().position(|x| x == &s).expect("Could not find struct member");
-                    let s = self.builder.build_struct_gep(*v, idx as u32, &s).unwrap();
-                    Ok(Some(self.builder.build_load(s, &parent)))
-                } else {panic!();}
+                if let ExprVal::Variable(s) = &sub.ex {
+                    if let Some(p) = self.struct_value_opt {
+                        let v = self.compile_expr(parent).unwrap().expect("Cannot use this as non-void");
+                        let idx = self.struct_forms[self.struct_forms_keys.iter().position(|&x| x == v.get_type().into_struct_type().ptr_type(inkwell::AddressSpace::Generic)).unwrap()].iter().position(|x| x == s).expect("Could not find struct member");
+                        let p_idx = self.struct_forms[self.struct_forms_keys.iter().position(|&x| x == self.struct_type_opt.unwrap()).unwrap()].iter().position(|x| x == s).expect("Could not find struct member");
+                            let s = self.builder.build_struct_gep(self.struct_value_opt.unwrap(), p_idx as u32, name).unwrap();
+                            let kid = self.builder.build_struct_gep(s, idx as u32, name).unwrap();
+                            self.struct_value_opt = None;
+                            return Ok(Some(kid.as_basic_value_enum()))
+                        } else {
+                            let v = self.compile_expr(parent).unwrap().expect("Cannot use this as non-void");
+                            let ptr = self.variables.get(name).unwrap();
+                            let idx = self.struct_forms[self.struct_forms_keys.iter().position(|&x| x == v.get_type().into_struct_type().ptr_type(inkwell::AddressSpace::Generic)).unwrap()].iter().position(|x| x == s).expect("Could not find struct member");
+                            println!("s: {:?}", v);
+                            let s = self.builder.build_struct_gep(*ptr, idx as u32, &s).unwrap();
+                            self.builder.build_store(s, self.compile_expr(&right).unwrap().expect("Cannot use this as non-void"));
+                            return Ok(None)
+                        }
+                } else { 
+                    if let ExprVal::Variable(name) = &parent.ex {
+                        self.struct_value_opt = Some(*self.variables.get(name).unwrap());
+                        self.struct_type_opt = Some(self.compile_expr(parent).unwrap().expect("Cannot use this as non-void").get_type().ptr_type(inkwell::AddressSpace::Generic));
+                        return Ok(self.compile_expr(&sub).unwrap());
+                    } else { panic!(); }
+                }
             }
             ExprVal::Block { body } => {
                 for i in body {
