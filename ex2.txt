@@ -2,3 +2,7 @@ f {
     x int
     y f64
 }
+
+neonmain() void {
+    f.x.p = 0
+}

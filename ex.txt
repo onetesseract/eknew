@@ -1,24 +1,27 @@
 printd(x f64) void
 printi(x int) void
+printip(x ptr int) void
 
 p {
     i int
     c f64
 }
 
-pp(x f64, y int) void {
-    printd(x)
-    printi(y)
-    return
+q {
+    i int
+    p p
 }
-v(x f64) int {
-    return 1
-}
+
 neonmain() void {
     x p
     x.i = 9
-    printi(x.i)
-    x.c = 9.8
-    printd(x.c)
+    f q
+    f.p = x
+    f.p.i = 8
+
+
+    printip(f.p.i)
+
+
     return
 }

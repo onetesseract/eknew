@@ -5,21 +5,13 @@ declare void @printd(double)
 
 declare void @printi(i64)
 
-define void @pp(double %x, i64 %y) {
-entry:
-  call void @printd(double %x)
-  call void @printi(i64 %y)
-  ret void
-}
-
-define i64 @v(double %x) {
-entry:
-  ret i64 1
-}
+declare void @printip(i64*)
 
 define void @neonmain() {
 entry:
-  call void @printi(i64 9)
-  call void @printd(double 9.800000e+00)
+  %f = alloca { i64, { i64, double } }, align 8
+  %"help im trapped in a universe factory3.repack" = getelementptr inbounds { i64, { i64, double } }, { i64, { i64, double } }* %f, i64 0, i32 1, i32 0
+  store i64 8, i64* %"help im trapped in a universe factory3.repack", align 8
+  call void @printip(i64* nonnull %"help im trapped in a universe factory3.repack")
   ret void
 }

@@ -8,6 +8,9 @@ void printd(double d) {
 void printi(int i) {
     printf("%i\n", i);
 }
+void printip(int* n) {
+    printf("%i\n", *n);
+}
 int main() {
     neonmain();
 }

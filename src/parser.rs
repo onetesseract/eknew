@@ -47,7 +47,7 @@ pub enum ExprVal {
     },
 
     SubAccess { // parent.sub
-        parent: String,
+        parent: Box<Expr>,
         sub: Box<Expr>,
     },
 
@@ -71,6 +71,7 @@ pub enum Type {
     Void,
     Unknown,
     Struct(String),
+    Pointer(Box<Type>),
 }
 
 #[derive(Debug, Clone)]
@@ -318,7 +319,7 @@ impl<'a> Parser<'a> {
 
     fn parse_expr(&mut self) -> Result<Expr, String> {
         match self.parse_unary_expr() {
-            Ok(left) => self.parse_binary_expr(0, left),
+            Ok(left) => { let e = self.parse_sub_access(left); self.parse_binary_expr(0, e)},
             err => err,
         }
     }
@@ -404,12 +405,34 @@ impl<'a> Parser<'a> {
 
         match self.curr() {
             Token::Ident(_id) => {
+                let isptr  = match &_id as &str {
+                    "ptr" => {self.advance().check(self.lexer.clone()); true}
+                    _ => false
+                };
+                let _id = match self.curr() {
+                    Token::Ident(x) => x,
+                    _ => panic!(),
+                };
                 let t = match &_id as &str {
                     "f64" => Type::F64,
                     "str" => Type::Str,
                     "int" => Type::Int,
                     "void" => Type::Void,
-                    i => { if self.structs.contains(&i.to_string()) { Type::Struct(i.to_string())} else {return Err(format!("Unknown type {:?}", self.curr()))}}
+                    i => { 
+                        if self.structs.contains(&i.to_string()) { 
+                            if isptr { 
+                                Type::Pointer(Box::new(Type::Struct(i.to_string())))
+                            } else {
+                                Type::Struct(i.to_string())
+                            }
+                        } else {
+                            if isptr { panic!(); }
+                            return Ok(Expr {typ: self.type_of_var(id.clone()).unwrap(), ex: ExprVal::Variable(id)})}
+                        }
+                };
+                let t = match isptr {
+                    true => Type::Pointer(Box::new(t)),
+                    false => t,
                 };
                 if self.advance().is_err() {
                     return Ok(Expr {typ: t, ex: ExprVal::VarDef { name: id, val: None}});
@@ -552,14 +575,16 @@ impl<'a> Parser<'a> {
                 self.structs.push(id.clone());
                 Ok(Expr {typ: Type::Unknown, ex: ExprVal::StructDef(Struct{name: id, members: members})})
             }
-            Token::Dot => {
-                self.advance().check(self.lexer.clone());
-                let sub = self.parse_id_expr().unwrap();
-                Ok(Expr {typ: Type::Unknown, ex: ExprVal::SubAccess {parent: id, sub: Box::new(sub)}})
-            }
-
             _ => Ok(Expr {typ: self.type_of_var(id.clone()).unwrap(), ex: ExprVal::Variable(id)})
         }
+    }
+    fn parse_sub_access(&mut self, e: Expr) -> Expr {
+        if !matches!(self.curr(), Token::Dot) { return e }
+        println!("YES");
+        self.advance().check(self.lexer.clone());
+        let x = self.parse_id_expr().unwrap();
+        let sub = self.parse_sub_access(x);
+        Expr {typ: Type::Unknown, ex: ExprVal::SubAccess {parent: Box::new(e), sub: Box::new(sub)}}
     }
 
     fn parse_unary_expr(&mut self) -> Result<Expr, String> {
