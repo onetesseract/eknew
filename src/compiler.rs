@@ -89,7 +89,6 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     if let ExprVal::SubAccess { parent, sub} = left.ex.borrow() {
                         let s = self.compile_expr(&left).unwrap().unwrap().into_pointer_value();
                         let var_val = self.compile_expr(&right).unwrap().expect("Cannot use this as non-void");
-                        println!("name {:?}", s.get_name());
                         self.builder.build_store(s, var_val);
 
                         return Ok(None)
@@ -197,7 +196,11 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 // emit merge block
                 self.builder.position_at_end(cont_bb);
                 
-                let phi = self.builder.build_phi(self.context.f64_type(), "iftmp");
+                if then_val.get_type() != else_val.get_type() {
+                    return Err("If nodes not same type".to_string());
+                }
+                
+                let phi = self.builder.build_phi(then_val.get_type(), "iftmp");
 
                 phi.add_incoming(&[
                     (&then_val, then_bb),
@@ -206,56 +209,6 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
                 Ok(Some(phi.as_basic_value())) // Should maybe be Ok(None)?
             }
-            /*
-            ExprVal::For { var_name, start, end, step, body } => {
-                let parent = self.fn_value();
-
-                let start_alloca = self.create_entry_block_alloca(&var_name);
-                let start = self.compile_expr(&start)?;
-
-                self.builder.build_store(start_alloca, start);
-
-                // go to loop block
-                let loop_bb = self.context.append_basic_block(parent, "loop");
-
-                self.builder.build_unconditional_branch(loop_bb);
-                self.builder.position_at_end(loop_bb);
-
-                let old_val = self.variables.remove(var_name.as_str());
-
-                self.variables.insert(var_name.to_ascii_lowercase(), start_alloca);
-
-                // emit body
-
-                self.compile_expr(&body)?;
-
-                //emit step
-                let step = match step {
-                    Some(step) => self.compile_expr(&step)?,
-                    None => BasicValueEnum::FloatValue(self.context.f64_type().const_float(1.0)),
-                };
-
-                // compile end condition
-                let end_cond = self.compile_expr(&end)?;
-                let curr_var = self.builder.build_load(start_alloca, &var_name);
-                let next_var = self.builder.build_float_add(curr_var.into_float_value(), step.float(), "nextvar");
-
-                self.builder.build_store(start_alloca, next_var);
-
-                let end_cond = self.builder.build_float_compare(FloatPredicate::ONE, end_cond.float(), self.context.f64_type().const_float(0.0), "loopcond");
-                let after_bb = self.context.append_basic_block(parent, "afterloop");
-
-                self.builder.build_conditional_branch(end_cond, loop_bb, after_bb);
-                self.builder.position_at_end(after_bb);
-
-                self.variables.remove(&var_name);
-
-                if let Some(val) = old_val {
-                    self.variables.insert(var_name, val);
-                }
-
-                Ok(BasicValueEnum::FloatValue(self.context.f64_type().const_float(0.0)))
-            }*/
             ExprVal::Float(nb) => {
                 Ok(Some(BasicValueEnum::FloatValue(self.context.f64_type().const_float(nb))))
             },
@@ -276,7 +229,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                         
                             let p_idx = self.struct_forms[self.struct_forms_keys.iter().position(|&x| x == self.struct_type_opt.unwrap()).unwrap()].iter().position(|x| x == pname).expect("Could not find struct member");
                             let s = self.builder.build_struct_gep(self.struct_value_opt.unwrap(), p_idx as u32, "aah idk").unwrap();
-                            let idx = self.struct_forms[self.struct_forms_keys.iter().position(|&x| x == s.get_type()).unwrap()].iter().position(|x| x == sb).expect("Could not find struct member");
+                            let idx = self.struct_forms[self.struct_forms_keys.iter().position(|&x| x == s.get_type()).unwrap()].iter().position(|x| x == sb).expect(&format!("Could not find struct member {}", sb));
                             let kid = self.builder.build_struct_gep(s, idx as u32, sb).unwrap();
                             self.struct_value_opt = None;
                             return Ok(Some(kid.as_basic_value_enum()))
@@ -293,14 +246,15 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                         self.struct_value_opt = Some(*self.variables.get(name).unwrap());
                         self.struct_type_opt = Some(self.compile_expr(&parent).unwrap().expect("Cannot use this as non-void").get_type().ptr_type(inkwell::AddressSpace::Generic));
                         return Ok(self.compile_expr(&sub).unwrap());
-                    } else { panic!(); }
+                    } else { println!("{:?}", parent); panic!(); }
                 }
             }
             ExprVal::Block { body } => {
+                let mut last = None;
                 for i in body {
-                    self.compile_expr(&i).unwrap();
+                    last = self.compile_expr(&i).unwrap();
                 }
-                Ok(Some(BasicValueEnum::FloatValue(self.context.f64_type().const_float(0.0))))
+                Ok(last)
             }
             ExprVal::Return(ret) => {
                 if ret.is_none() {
@@ -323,6 +277,10 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 self.variables.insert(name, alloca);
 
                 Ok(init_val)
+            }
+            ExprVal::Deref(e) => {
+                let p = self.builder.build_load(self.compile_expr(&e).unwrap().expect("Cannot use this as non-void").into_pointer_value(), "tmpderef");
+                Ok(Some(p))
             }
             _ => Err(format!("Cannot compile {:?} as idk how to :/", expr)),
         }
@@ -456,7 +414,6 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         //self.struct_forms.insert(_s, forms);
         self.struct_forms_keys.push(_s.ptr_type(inkwell::AddressSpace::Generic));
         self.struct_forms.push(forms);
-        println!("{:?}", _s);
         Ok(_s)
     }
 

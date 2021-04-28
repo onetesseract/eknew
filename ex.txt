@@ -1,27 +1,27 @@
-printd(x f64) void
+printd(x f64) void # extern statements
 printi(x int) void
-printip(x ptr int) void
+printip(x ptr int) void # not sure about the pointer syntax yet, might try &
 
-p {
-    i int
-    c f64
+struct_name { # structs
+    number int
+    other_data f64
 }
 
-q {
+other_struct {
     i int
-    p p
+    p struct_name
 }
 
 neonmain() void {
-    x p
-    x.i = 9
-    f q
+    x struct_name
+    x.number = 9
+    f other_struct
     f.p = x
-    f.p.i = 8
+    f.p.number = 8
 
+    q int = if 0.0 { 7.9 } else { 6 }
 
-    printip(f.p.i)
-
+    printi(q)
 
     return
 }

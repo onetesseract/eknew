@@ -150,7 +150,6 @@ impl <'a> Lexer<'a> {
 
         pos += 1;
         //println!("{:?},, {},, {:?}", next, pos, src.chars().nth(pos));
-        println!("NEXT: {:?}", next);
         let result = match next.unwrap() {
             '(' => Ok(Token::LParen),
             ')' => Ok(Token::RParen),

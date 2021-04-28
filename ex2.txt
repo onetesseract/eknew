@@ -4,5 +4,5 @@ f {
 }
 
 neonmain() void {
-    f.x.p = 0
+    *(i.p)
 }

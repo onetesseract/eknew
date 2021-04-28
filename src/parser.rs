@@ -42,6 +42,8 @@ pub enum ExprVal {
     Return(Option<Box<Expr>>),
     Function(Box<Function>),
 
+    Deref(Box<Expr>),
+
     Block {
         body: Vec<Expr>,
     },
@@ -446,7 +448,6 @@ impl<'a> Parser<'a> {
                 return Ok(Expr {typ: t, ex: ExprVal::VarDef { name: id, val: None }})
             },
             Token::LParen => {
-                println!("is lparen");
                 self.advance().check(self.lexer.clone());
 
                 if let Token::RParen = self.curr() {
@@ -580,7 +581,6 @@ impl<'a> Parser<'a> {
     }
     fn parse_sub_access(&mut self, e: Expr) -> Expr {
         if !matches!(self.curr(), Token::Dot) { return e }
-        println!("YES");
         self.advance().check(self.lexer.clone());
         let x = self.parse_id_expr().unwrap();
         let sub = self.parse_sub_access(x);
@@ -588,15 +588,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_unary_expr(&mut self) -> Result<Expr, String> {
+        /* 
 
         // let typ = self.find_type().unwrap();
 
         let op = match self.current().unwrap() {
             Token::Op(ch) => {
-                // self.advance();
+                self.advance();
                 ch
             },
-            _ => return self.parse_primary(),
+            _ => */return self.parse_primary() /*,
         };
 
         let mut name = String::from("unary");
@@ -606,7 +607,7 @@ impl<'a> Parser<'a> {
         Ok(Expr { typ: Type::Unknown, ex: ExprVal::Call {
             fn_name: name,
             args: vec![ self.parse_unary_expr().unwrap() ]
-        }})
+        }})*/
     }
 
     fn parse_binary_expr(&mut self, prec: i32, mut left: Expr) -> Result<Expr, String> {
@@ -733,6 +734,8 @@ impl<'a> Parser<'a> {
             Token::LBrace => self.parse_block(),
             Token::If => self.parse_conditional_expr(),
             Token::For => self.parse_for_expr(),
+            Token::Comment => { self.advance().check(self.lexer.clone()); self.parse_expr() }
+            Token::Op('*') => { self.advance().check(self.lexer.clone()); Ok(Expr {typ: Type::Unknown, ex: ExprVal::Deref(Box::new(self.parse_expr().unwrap()))}) }
             _ => {
                 let s = format!("I don't know how to parse {:?}", self.curr());
                 let l = LexError::with_index(s, self.pos);
