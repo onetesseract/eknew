@@ -1,8 +1,12 @@
-f {
-    x int
-    y f64
-}
+printi(x int) void
 
 neonmain() void {
-    *(i.p)
+    i int = 17
+    p int = switch i {
+        16 { 5 }
+        17 { 3 }
+        default { 17 }
+    }
+    printi(p)
+    return
 }

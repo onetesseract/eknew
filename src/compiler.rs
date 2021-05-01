@@ -1,4 +1,5 @@
 use inkwell::types::{PointerType, StructType};
+use inkwell::basic_block::BasicBlock;
 use inkwell::types::BasicType;
 use crate::{inkwell::builder::Builder, parser::{self, Function, Type}};
 use crate::inkwell::context::Context;
@@ -86,7 +87,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         match expr.ex.clone() {
             ExprVal::Binary { op, left, right } => {
                 if op == '=' {
-                    if let ExprVal::SubAccess { parent, sub} = left.ex.borrow() {
+                    if let ExprVal::SubAccess { .. } = left.ex.borrow() {
                         let s = self.compile_expr(&left).unwrap().unwrap().into_pointer_value();
                         let var_val = self.compile_expr(&right).unwrap().expect("Cannot use this as non-void");
                         self.builder.build_store(s, var_val);
@@ -209,6 +210,86 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
                 Ok(Some(phi.as_basic_value())) // Should maybe be Ok(None)?
             }
+            ExprVal::Switch(cmp, vals) => {
+                let parent = self.fn_value();
+
+                // create condition by comparing with 0.0 and returning an int
+                let cond = self.compile_expr(&cmp)?;
+
+                let mut body = vec![];
+
+                let mut values: Vec<Option<BasicValueEnum>> = vec![];
+
+                let mut default = None;
+
+                let cont_bb = self.context.append_basic_block(parent, "switchcont");
+
+                for (c, v) in vals {
+                    match &c.ex {
+                        ExprVal::Variable(n) => {
+                            if *n == String::from(crate::consts::SWITCH_DEFAULT_KW) {
+                                default = Some(v);
+                                continue;
+                            }
+                        },
+                        _ => {},
+                    }
+                    let cmp = self.compile_expr(&c).unwrap().expect("void shish");
+                    let bb = self.context.append_basic_block(parent, "switch");
+                    self.builder.position_at_end(bb);
+                    let v = self.compile_expr(&v).unwrap();
+                    values.push(v);
+                    self.builder.build_unconditional_branch(cont_bb);
+                    body.push((cmp.into_int_value(), bb));
+                }
+
+                let default_bb = self.context.append_basic_block(parent, "switchdefault");
+
+                self.builder.position_at_end(self.fn_value().get_first_basic_block().unwrap());
+
+                self.builder.build_switch(cond.unwrap().into_int_value(), default_bb, body.as_slice());
+
+                self.builder.position_at_end(default_bb);
+                let d = self.compile_expr(&default.unwrap()).unwrap();
+                self.builder.build_unconditional_branch(cont_bb);
+
+                values.push(d);
+
+                let mut branches = vec![];
+
+                for (_, x) in body {
+                    branches.push(x);
+                }
+                branches.push(default_bb);
+
+                self.builder.position_at_end(cont_bb);
+
+                // todo: sanity sameity type check
+
+                if values[0].is_none() { return Ok(None) }
+
+                for x in &values {
+                    if x.unwrap().get_type() != values[0].unwrap().get_type() {
+                        return Err(String::from("Types don't have identical types!"));
+                    }
+                }
+
+                let phi = self.builder.build_phi(values[0].unwrap().get_type(), "switchtmp");
+
+                println!("{:?}", branches);
+
+                println!("{:?}", values);
+
+                for x in 0..branches.len() {
+                    println!("addincoming");
+                    phi.add_incoming(&[(&values[x].unwrap(), branches[x])]);
+                }                
+                println!("\n\n\n");
+                self.module.print_to_stderr();
+                println!("\n\n\n");
+
+                Ok(Some(phi.as_basic_value())) // Should maybe be Ok(None)?
+            }
             ExprVal::Float(nb) => {
                 Ok(Some(BasicValueEnum::FloatValue(self.context.f64_type().const_float(nb))))
             },
@@ -228,7 +309,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                             // let v = self.compile_expr(parent).unwrap().expect("Cannot use this as non-void");
                         
                             let p_idx = self.struct_forms[self.struct_forms_keys.iter().position(|&x| x == self.struct_type_opt.unwrap()).unwrap()].iter().position(|x| x == pname).expect("Could not find struct member");
-                            let s = self.builder.build_struct_gep(self.struct_value_opt.unwrap(), p_idx as u32, "aah idk").unwrap();
+                            let s = self.builder.build_struct_gep(p, p_idx as u32, "aah idk").unwrap();
                             let idx = self.struct_forms[self.struct_forms_keys.iter().position(|&x| x == s.get_type()).unwrap()].iter().position(|x| x == sb).expect(&format!("Could not find struct member {}", sb));
                             let kid = self.builder.build_struct_gep(s, idx as u32, sb).unwrap();
                             self.struct_value_opt = None;
@@ -386,10 +467,6 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
             return Ok(function);
         } else {
-            unsafe {
-                function.delete();
-            }
-
             return Err(format!("Invalid generated function"));
         }
     }

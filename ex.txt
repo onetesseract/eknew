@@ -19,7 +19,7 @@ neonmain() void {
     f.p = x
     f.p.number = 8
 
-    q int = if 0.0 { 7.9 } else { 6 }
+    q int = if 0.0 { 7 } else { 6 }
 
     printi(q)
 
