@@ -1,5 +1,4 @@
 use inkwell::types::{PointerType, StructType};
-use inkwell::basic_block::BasicBlock;
 use inkwell::types::BasicType;
 use crate::{inkwell::builder::Builder, parser::{self, Function, Type}};
 use crate::inkwell::context::Context;
@@ -83,6 +82,16 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         
     }
 
+    fn create_entry_block_alloca_with_ty(&self, name: &str, ty: BasicTypeEnum<'ctx>) -> PointerValue<'ctx> {
+        let builder = self.context.create_builder();
+        let entry = self.fn_value().get_first_basic_block().unwrap();
+        match entry.get_first_instruction() {
+            Some(first_instr) => builder.position_before(&first_instr),
+            None => builder.position_at_end(entry),
+        }
+        builder.build_alloca(ty, name)
+    }
+
     fn compile_expr(&mut self, expr: &Expr) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         match expr.ex.clone() {
             ExprVal::Binary { op, left, right } => {
@@ -149,6 +158,10 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                                         },
                                         BasicTypeEnum::IntType(_) => {
                                             Ok(Some(BasicValueEnum::IntValue(value.into_int_value())))
+                                        },
+                                        BasicTypeEnum::StructType(x) => {
+                                            
+                                            Ok(Some(BasicValueEnum::StructValue(value.into_struct_value())))
                                         },
                                         _ => panic!("Unhandleable return type {:?}", fun.get_type().get_return_type().unwrap()),
                                     },
@@ -321,6 +334,13 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                             let s = self.builder.build_struct_gep(*ptr, idx as u32, "help im trapped in a universe factory").unwrap();
                             return Ok(Some(s.as_basic_value_enum()))
                         }
+                    } else if let ExprVal::Call { .. } = &parent.ex {
+                        let c = self.compile_expr(&parent).unwrap().expect("Cannot use as non-void");
+                        let idx = self.struct_forms[self.struct_forms_keys.iter().position(|&x| x == c.get_type().into_struct_type().ptr_type(inkwell::AddressSpace::Generic)).unwrap()].iter().position(|x| x == sb).expect("Could not find struct member");
+                        let ptr = self.create_entry_block_alloca_with_ty("structsubacesstmp", c.get_type());
+                        self.builder.build_store(ptr, c);
+                        let gep = self.builder.build_struct_gep(ptr, idx as u32, "tmpgep").unwrap();
+                        return Ok(Some(gep.as_basic_value_enum()))
                     } else { println!("{:?}", sub); panic!(); }
                 } else { 
                     if let ExprVal::Variable(name) = &parent.ex {
@@ -372,6 +392,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             Type::F64 => BasicTypeEnum::FloatType(self.context.f64_type()),
             Type::Int => BasicTypeEnum::IntType(self.context.i64_type()),
             Type::Pointer(x) => {BasicTypeEnum::PointerType(self.match_type(*x).ptr_type(inkwell::AddressSpace::Generic))}
+            Type::Struct(x) => self.structs.get(&x).unwrap().as_basic_type_enum(),
             _ => panic!(),
         }
     }
@@ -384,10 +405,11 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         }
         let args_types = args_types.as_slice();
 
-        let fn_type = match proto.ret_type {
+        let fn_type = match proto.ret_type.clone() {
             parser::Type::F64 => self.context.f64_type().fn_type(args_types, false),
             parser::Type::Int => self.context.i64_type().fn_type(args_types, false),
             parser::Type::Void => self.context.void_type().fn_type(args_types, false),
+            parser::Type::Struct(x) => self.structs.get(&x).expect("unknown type").fn_type(args_types, false),
             _ => panic!("Unknown type"),
         };
         let fn_val = self.module.add_function(proto.name.as_str(), fn_type, None);
@@ -398,24 +420,15 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 _ => return Err(format!("You can't have this value ({:?}) as the #{} parameter for a function def", proto.args[i], i)),
             };
             arg.set_name(&s);
-            /*
-            match arg {
-                BasicValueEnum::IntValue(_) => arg.into_int_value().set_name(&s),
-                BasicValueEnum::FloatValue(_) => arg.into_float_value().set_name(&s),
-                BasicV
-                _ => panic!("Unimplemented type {:?}", arg),
-            }*/
         }
         Ok(fn_val)
     }
 
     fn compile_fn(&mut self) -> Result<FunctionValue<'ctx>, String> {
         let proto = &self.function.unwrap().prototype;
-        // println!("Compiling fn with proto {:?}", proto);
         let function = self.compile_prototype(proto).unwrap();
 
         if self.function.unwrap().body.is_none() {
-            // println!("None body");
             return Ok(function);
         }
         let entry = self.context.append_basic_block(function, "entry");
@@ -440,24 +453,15 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             
         }
         // compile body
-        // println!("Body: {:?}", self.function.body);
         if let ExprVal::Block { body }  = self.function.unwrap().body.clone().unwrap().ex {
-            //println!("Here");
             for i in body {
-                //println!("Compiling from fn {:?}", i);
                 self.compile_expr(&i).unwrap();
             }
         } else {
-            // println!("Expected block for fn definition (got {:?})", self.function.body.clone().unwrap());
-            // return Err(format!("Expected block for fn definition (got {:?})", self.function.body.clone().unwrap()))
             let b = self.compile_expr(&self.function.unwrap().body.clone().unwrap()).unwrap();
             self.builder.build_return(Some(&b.expect("Cannot use this as non-void")));
         }
         
-        // self.builder.build_return(Some(&self.context.f64_type().const_float(0.0)));
-
-        // return it after verification and optimization
-
         println!("Printing before stuff");
         function.print_to_stderr();
             
@@ -508,17 +512,17 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         match expr {
             parser::TopLevelExpr::Struct(s) => {
                 let mut compiler = Compiler {
-                    context: context,
-                    builder: builder,
+                    context,
+                    builder,
                     fpm: pass_manager,
-                    module: module,
+                    module,
                     function: None,
                     _struct: Some(s),
                     variables: HashMap::new(),
                     fn_value_opt: None,
-                    structs: structs,
-                    struct_forms: struct_forms,
-                    struct_forms_keys: struct_forms_keys,
+                    structs,
+                    struct_forms,
+                    struct_forms_keys,
                     struct_value_opt: None,
                     struct_type_opt: None,
 
@@ -528,17 +532,17 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             }
             parser::TopLevelExpr::Function(f) => {
                 let mut compiler = Compiler {
-                    context: context,
-                    builder: builder,
+                    context,
+                    builder,
                     fpm: pass_manager,
-                    module: module,
+                    module,
                     function: Some(f),
                     _struct: None,
                     variables: HashMap::new(),
                     fn_value_opt: None,
-                    structs: structs,
-                    struct_forms: struct_forms,
-                    struct_forms_keys: struct_forms_keys,
+                    structs,
+                    struct_forms,
+                    struct_forms_keys,
                     struct_value_opt: None,
                     struct_type_opt: None,
                 };
@@ -546,7 +550,6 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 Ok(Returnable::FunctionValue(compiler.compile_fn().unwrap()))
             }
         }
-        
     }
 }
 

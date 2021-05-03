@@ -1,12 +1,20 @@
-printi(x int) void
+printip(x ptr int) void
+
+s {
+    i int
+}
+
+somefn() s {
+    x s
+    x.i = 8
+    return x
+}
+
+otherfn(x s) ptr int {
+    return x.i
+}
 
 neonmain() void {
-    i int = 17
-    p int = switch i {
-        16 { 5 }
-        17 { 3 }
-        default { 17 }
-    }
-    printi(p)
+    printip(somefn().i)
     return
 }

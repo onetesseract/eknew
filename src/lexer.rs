@@ -256,19 +256,3 @@ impl <'a> Lexer<'a> {
     }
 }
 
-/*
-impl <'a> Iterator for Lexer<'a> {
-    type Item = Token;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.lex() {
-            Err(_) => None,
-            Ok(token) => match token {
-                Token::EOF => None,
-                _ => Some(token),
-            },
-        }
-    }
-}
-
-*/
