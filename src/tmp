@@ -1,0 +1,33 @@
+Function(Function { 
+    prototype: Prototype { 
+        name: "neonmain", 
+        args: [], 
+        ret_type: Void 
+    }, 
+    body: Some(Expr { 
+        typ: Void, 
+        ex: Block { 
+            body: [Expr { 
+                typ: Unknown, 
+                ex: SubAccess { 
+                    parent: Expr { 
+                        typ: Unknown, 
+                        ex: SubAccess { 
+                            parent: Expr { 
+                                typ: F64, 
+                                ex: Variable("x") 
+                            }, sub: Expr {
+                                typ: F64, 
+                                ex: Variable("y") 
+                            } 
+                        } 
+                    }, 
+                    sub: Expr { 
+                        typ: F64, ex: Variable("z") 
+                    } 
+                }
+            }] 
+        } 
+    }), 
+    is_anon: false 
+})

@@ -1,20 +1,20 @@
-printip(x ptr int) void
+printi(x int) void
 
 s {
     i int
 }
 
-somefn() s {
-    x s
-    x.i = 8
-    return x
+impl s {
+    x() int {
+        printi(self.i)
+        return 8
+    }
 }
 
-otherfn(x s) ptr int {
-    return x.i
-}
 
 neonmain() void {
-    printip(somefn().i)
+    p s
+    p.i = 92
+    printi(p.i)
     return
 }

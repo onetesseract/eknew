@@ -14,6 +14,7 @@ mod consts {
     pub const SWITCH_DEFAULT_KW: &str = "default";
     pub const RETURN_KW: &str = "return";
     pub const SWITCH_KW: &str = "switch";
+    pub const IMPL_BLOCK_KW: &str = "impl";
 }
 fn main() {
     let mut prec: std::collections::HashMap<char, i32> = std::collections::HashMap::new();
@@ -70,6 +71,10 @@ fn main() {
 
     let mut struct_forms = vec![];
 
+    let mut sub_fns_vals = vec![];
+    let mut sub_fns_keys = vec![];
+    
+
     loop {
         if p.at_end() {
             break;
@@ -82,7 +87,7 @@ fn main() {
     }
 
     for i in exprs {
-        Compiler::compile(&context, &builder, &fpm, &module, &i, &mut structs, &mut struct_forms_keys, &mut struct_forms).unwrap();
+        Compiler::compile(&context, &builder, &fpm, &module, &i, &mut structs, &mut struct_forms_keys, &mut struct_forms, &mut sub_fns_keys, &mut sub_fns_vals).unwrap();
     }
 
     module.print_to_file("out.ll").unwrap();

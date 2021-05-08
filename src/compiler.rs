@@ -18,7 +18,7 @@ pub struct Compiler<'a, 'ctx> {
     pub builder: &'a Builder<'ctx>,
     pub fpm: &'a PassManager<FunctionValue<'ctx>>,
     pub module: &'a Module<'ctx>,
-    pub function: Option<&'a Function>,
+    pub function: Option<Function>,
     pub _struct: Option<&'a parser::Struct>,
 
     pub structs: &'a mut HashMap<String, StructType<'ctx>>,
@@ -30,6 +30,14 @@ pub struct Compiler<'a, 'ctx> {
     fn_value_opt: Option<FunctionValue<'ctx>>,
     struct_value_opt: Option<PointerValue<'ctx>>,
     struct_type_opt: Option<PointerType<'ctx>>,
+
+    sub_fn_struct: Option<BasicValueEnum<'ctx>>,
+    sub_fns_vals: &'a mut Vec<HashMap<String, FunctionValue<'ctx>>>,
+    sub_fns_keys: &'a mut Vec<BasicTypeEnum<'ctx>>,
+
+    impl_value_opt: Option<ExprVal>,
+
+    is_set: bool,
 }
 
 trait FloatOr<'ctx> {
@@ -97,9 +105,12 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             ExprVal::Binary { op, left, right } => {
                 if op == '=' {
                     if let ExprVal::SubAccess { .. } = left.ex.borrow() {
-                        let s = self.compile_expr(&left).unwrap().unwrap().into_pointer_value();
+                        self.is_set = true;
+                        let s = self.compile_expr(&left).unwrap().unwrap();
+                        self.is_set = false;
+                        println!("S: {:?} {:?}", s, left);
                         let var_val = self.compile_expr(&right).unwrap().expect("Cannot use this as non-void");
-                        self.builder.build_store(s, var_val);
+                        self.builder.build_store(s.into_pointer_value(), var_val);
 
                         return Ok(None)
 
@@ -142,40 +153,53 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 }
             }
             ExprVal::Call { fn_name, args } => {
-                match self.get_function(fn_name.as_str()) {
-                    Some(fun) => {
-                        let mut comp_args = Vec::with_capacity(args.len());
-                        for arg in args {
-                            comp_args.push(self.compile_expr(&arg)?);
-                        }
-                        let argsv: Vec<BasicValueEnum> = comp_args.iter().by_ref().map(|&val| val.expect("Cannot use this as non-void").into()).collect();
-                        match self.builder.build_call(fun, argsv.as_slice(), "tmp").try_as_basic_value().left() {
-                            Some(value) => {
-                                match fun.get_type().get_return_type() {
-                                    Some(x) => match x {
-                                        BasicTypeEnum::FloatType(_) => {
-                                            Ok(Some(BasicValueEnum::FloatValue(value.into_float_value())))
-                                        },
-                                        BasicTypeEnum::IntType(_) => {
-                                            Ok(Some(BasicValueEnum::IntValue(value.into_int_value())))
-                                        },
-                                        BasicTypeEnum::StructType(x) => {
-                                            
-                                            Ok(Some(BasicValueEnum::StructValue(value.into_struct_value())))
-                                        },
-                                        _ => panic!("Unhandleable return type {:?}", fun.get_type().get_return_type().unwrap()),
-                                    },
-                                    None => {
-                                        Ok(None)
-                                    }
-                                    
-                                   
-                                }
-                            }
-                            None => Ok(None),
-                        }
+                if let Some(s) = self.sub_fn_struct.clone() {
+                    let fun_idx = self.sub_fns_keys.iter().position(|&x| x == s.get_type().as_basic_type_enum()).unwrap();
+                    let fun = *self.sub_fns_vals[fun_idx].get(&fn_name).unwrap();
+                    let mut comp_args = Vec::with_capacity(args.len()+1);
+                    comp_args.push(s);
+                    for arg in args { comp_args.push(self.compile_expr(&arg).unwrap().unwrap()) }
+                    match self.builder.build_call(fun, comp_args.as_slice(), "tmp").try_as_basic_value().left() {
+                        Some(v) => Ok(Some(v)),
+                        None => Ok(None),
                     }
-                    None => Err(format!("Unknown function `{}`", fn_name)),
+
+                } else {
+                    match self.get_function(fn_name.as_str()) {
+                        Some(fun) => {
+                            let mut comp_args = Vec::with_capacity(args.len());
+                            for arg in args {
+                                comp_args.push(self.compile_expr(&arg)?);
+                            }
+                            let argsv: Vec<BasicValueEnum> = comp_args.iter().by_ref().map(|&val| val.expect("Cannot use this as non-void").into()).collect();
+                            match self.builder.build_call(fun, argsv.as_slice(), "tmp").try_as_basic_value().left() {
+                                Some(value) => {
+                                    match fun.get_type().get_return_type() {
+                                        Some(x) => match x {
+                                            BasicTypeEnum::FloatType(_) => {
+                                                Ok(Some(BasicValueEnum::FloatValue(value.into_float_value())))
+                                            },
+                                            BasicTypeEnum::IntType(_) => {
+                                                Ok(Some(BasicValueEnum::IntValue(value.into_int_value())))
+                                            },
+                                            BasicTypeEnum::StructType(_) => {
+                                                
+                                                Ok(Some(BasicValueEnum::StructValue(value.into_struct_value())))
+                                            },
+                                            _ => panic!("Unhandleable return type {:?}", fun.get_type().get_return_type().unwrap()),
+                                        },
+                                        None => {
+                                            Ok(None)
+                                        }
+                                        
+                                       
+                                    }
+                                }
+                                None => Ok(None),
+                            }
+                        }
+                        None => Err(format!("Unknown function `{}`", fn_name)),
+                    }
                 }
             }
             ExprVal::Conditional { cond, consequence, alternative } => {
@@ -289,17 +313,10 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
                 let phi = self.builder.build_phi(values[0].unwrap().get_type(), "switchtmp");
 
-                println!("{:?}", branches);
-
-                println!("{:?}", values);
-
                 for x in 0..branches.len() {
-                    println!("addincoming");
                     phi.add_incoming(&[(&values[x].unwrap(), branches[x])]);
                 }                
-                println!("\n\n\n");
                 self.module.print_to_stderr();
-                println!("\n\n\n");
 
                 Ok(Some(phi.as_basic_value())) // Should maybe be Ok(None)?
             }
@@ -315,7 +332,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     None => { Err(format!("Unknown variable {}", name))}
                 }
             },
-            ExprVal::SubAccess {parent, sub} => {
+            /* ExprVal::SubAccess {parent, sub} => {
                 if let ExprVal::Variable(sb) = &sub.ex   {
                     if let ExprVal::Variable(pname) = &parent.ex {
                         if let Some(p) = self.struct_value_opt {
@@ -332,7 +349,9 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                             let ptr = self.variables.get(pname).unwrap();
                             let idx = self.struct_forms[self.struct_forms_keys.iter().position(|&x| x == v.get_type().into_struct_type().ptr_type(inkwell::AddressSpace::Generic)).unwrap()].iter().position(|x| x == sb).expect("Could not find struct member");
                             let s = self.builder.build_struct_gep(*ptr, idx as u32, "help im trapped in a universe factory").unwrap();
-                            return Ok(Some(s.as_basic_value_enum()))
+                            if self.is_set { return Ok(Some(s.as_basic_value_enum())) }
+                            let val = self.builder.build_load(s, "tmpgepget");
+                            return Ok(Some(val))
                         }
                     } else if let ExprVal::Call { .. } = &parent.ex {
                         let c = self.compile_expr(&parent).unwrap().expect("Cannot use as non-void");
@@ -340,15 +359,60 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                         let ptr = self.create_entry_block_alloca_with_ty("structsubacesstmp", c.get_type());
                         self.builder.build_store(ptr, c);
                         let gep = self.builder.build_struct_gep(ptr, idx as u32, "tmpgep").unwrap();
-                        return Ok(Some(gep.as_basic_value_enum()))
-                    } else { println!("{:?}", sub); panic!(); }
-                } else { 
-                    if let ExprVal::Variable(name) = &parent.ex {
-                        self.struct_value_opt = Some(*self.variables.get(name).unwrap());
-                        self.struct_type_opt = Some(self.compile_expr(&parent).unwrap().expect("Cannot use this as non-void").get_type().ptr_type(inkwell::AddressSpace::Generic));
-                        return Ok(self.compile_expr(&sub).unwrap());
+                        let val = self.builder.build_load(gep, "tmpgetget");
+                        return Ok(Some(val))
+                    } else if let ExprVal::SubAccess { parent, sub } = &parent.ex {
+                        let x = self.compile_expr(&parent).unwrap().expect("non void");
+                        let p = self.create_entry_block_alloca_with_ty("structsubaccesstmp", x.get_type());
+                        self.builder.build_store(p, x);
+                        if let ExprVal::Call { .. } = &sub.ex {
+                            self.sub_fn_struct = Some(*parent.clone());
+                            let s = Ok(self.compile_expr(&sub).unwrap()); // NENDS REWRITE: VERY MESS
+                            self.sub_fn_struct = None;
+                            return s;
+                        } else {
+                            println!("e: {:?}", expr);
+                            let tmp = &self.struct_forms[self.struct_forms_keys.iter().position(|&y| y == x.get_type().into_struct_type().ptr_type(inkwell::AddressSpace::Generic)).unwrap()];
+                            println!("TMP: {:?}", tmp);
+                            let idx = tmp.iter().position(|x| x == sb).expect(format!("Could not find struct member {}", sb).as_str());
+                            let s = self.builder.build_struct_gep(p, idx as u32, "help im trapped in a universe factory").unwrap();
+                            if self.is_set { return Ok(Some(s.as_basic_value_enum())) }
+                            let val = self.builder.build_load(s, "tmpgepget");
+                            return Ok(Some(val))
+                        }
+
+
                     } else { println!("{:?}", parent); panic!(); }
+                } else if let ExprVal::Call { .. } = &sub.ex {
+                    println!("HERE");
+                    self.sub_fn_struct = Some(*parent);
+                    let s = Ok(self.compile_expr(&sub).unwrap()); // NENDS REWRITE: VERY MESS
+                    self.sub_fn_struct = None;
+                    return s;
+                } /* else if let ExprVal::Variable(name) = &parent.ex {
+                    self.struct_value_opt = Some(*self.variables.get(name).unwrap());
+                    self.struct_type_opt = Some(self.compile_expr(&parent).unwrap().expect("Cannot use this as non-void").get_type().ptr_type(inkwell::AddressSpace::Generic));
+                    return Ok(self.compile_expr(&sub).unwrap());
+                } */ else { println!("{:?} {:?}", parent, sub); panic!(); }
+            }*/
+
+            ExprVal::SubAccess {parent, sub } => {
+                let p = self.compile_expr(&parent).unwrap().expect("non void");
+                if let ExprVal::Variable(n) = sub.ex {
+                    let idx = self.struct_forms_keys.iter().position(|&x| x == p.get_type().ptr_type(inkwell::AddressSpace::Generic)).unwrap();
+                    let s = self.struct_forms[idx].iter().position(|x| *x == n).unwrap();
+                    let al = self.create_entry_block_alloca_with_ty("tmpgepstore", p.get_type());
+                    self.builder.build_store(al, p);
+                    let gep = self.builder.build_struct_gep(al, s as u32, "tmpgep").unwrap();
+                    if self.is_set { return Ok(Some(gep.as_basic_value_enum()))}
+                    let s = self.builder.build_load(gep, "tmpgepload");
+                    return Ok(Some(s));
+                } else if let ExprVal::Call { .. } = &sub.ex {
+                    self.sub_fn_struct = Some(p);
+                    return self.compile_expr(&sub);
                 }
+                panic!();
+                Ok(None)
             }
             ExprVal::Block { body } => {
                 let mut last = None;
@@ -425,10 +489,10 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
     }
 
     fn compile_fn(&mut self) -> Result<FunctionValue<'ctx>, String> {
-        let proto = &self.function.unwrap().prototype;
-        let function = self.compile_prototype(proto).unwrap();
+        let proto = self.function.clone().unwrap().prototype;
+        let function = self.compile_prototype(&proto).unwrap();
 
-        if self.function.unwrap().body.is_none() {
+        if self.function.clone().unwrap().body.is_none() {
             return Ok(function);
         }
         let entry = self.context.append_basic_block(function, "entry");
@@ -453,12 +517,12 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             
         }
         // compile body
-        if let ExprVal::Block { body }  = self.function.unwrap().body.clone().unwrap().ex {
+        if let ExprVal::Block { body }  = self.function.clone().unwrap().body.clone().unwrap().ex {
             for i in body {
                 self.compile_expr(&i).unwrap();
             }
         } else {
-            let b = self.compile_expr(&self.function.unwrap().body.clone().unwrap()).unwrap();
+            let b = self.compile_expr(&self.function.clone().unwrap().body.clone().unwrap()).unwrap();
             self.builder.build_return(Some(&b.expect("Cannot use this as non-void")));
         }
         
@@ -498,6 +562,33 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         Ok(_s)
     }
 
+    fn compile_impl(&mut self) -> Result<(), String> {
+        if let Some(ExprVal::Impl(v, s_type)) = self.impl_value_opt.clone() {
+            let mut v = v.clone();
+            for mut i in v {
+                i.prototype.args.insert(0, Expr { typ: s_type.clone(), ex: ExprVal::VarDef { name: "self".to_string(), val: None }});
+                self.function = Some(i.clone());
+                let fun = self.compile_fn().unwrap();
+                match s_type.clone() {
+                    Type::Struct(s) => {
+                    let s = self.structs.get(&s).unwrap().as_basic_type_enum();
+                    if !self.sub_fns_keys.contains(&s) {self.sub_fns_keys.push(s); self.sub_fns_vals.push(HashMap::new());}
+                    let idx = self.sub_fns_keys.iter().position(|&x| x == s).unwrap();
+                    self.sub_fns_vals[idx].insert(i.prototype.name, fun);
+                    },
+                    Type::Int => {
+                        if !self.sub_fns_keys.contains(&&self.context.f64_type().as_basic_type_enum()) {self.sub_fns_keys.push(self.context.f64_type().as_basic_type_enum()); self.sub_fns_vals.push(HashMap::new())}
+                        let idx = self.sub_fns_keys.iter().position(|&x| x == self.context.f64_type().as_basic_type_enum()).unwrap();
+                        self.sub_fns_vals[idx].insert(i.prototype.name, fun);
+                    }
+                    _ => panic!()
+                }
+
+            };
+            Ok(())
+        } else { panic!(); }
+    }
+
     // compile
     pub fn compile(
         context: &'ctx Context,
@@ -508,6 +599,8 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         structs: &mut HashMap<String, StructType<'ctx>>,
         struct_forms: &mut Vec<Vec<String>>,
         struct_forms_keys: &mut Vec<PointerType<'ctx>>,
+        sub_fns_vals: &mut Vec<HashMap<String, FunctionValue<'ctx>>>,
+        sub_fns_keys: &mut Vec<BasicTypeEnum<'ctx>>,
     ) -> Result<Returnable<'ctx>, String> {
         match expr {
             parser::TopLevelExpr::Struct(s) => {
@@ -526,6 +619,14 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     struct_value_opt: None,
                     struct_type_opt: None,
 
+                    sub_fn_struct: None,
+                    sub_fns_vals,
+                    sub_fns_keys,
+
+                    impl_value_opt: None,
+
+                    is_set: false,
+
                 };
         
                 Ok(Returnable::StructType(compiler.compile_struct().unwrap()))
@@ -536,7 +637,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     builder,
                     fpm: pass_manager,
                     module,
-                    function: Some(f),
+                    function: Some(f.clone()),
                     _struct: None,
                     variables: HashMap::new(),
                     fn_value_opt: None,
@@ -545,9 +646,46 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     struct_forms_keys,
                     struct_value_opt: None,
                     struct_type_opt: None,
+
+                    sub_fn_struct: None,
+                    sub_fns_vals,
+                    sub_fns_keys,
+
+                    impl_value_opt: None,
+
+                    is_set: false,
+
                 };
         
                 Ok(Returnable::FunctionValue(compiler.compile_fn().unwrap()))
+            }
+            parser::TopLevelExpr::Impl(x, y) => {
+                let mut compiler = Compiler {
+                    context,
+                    builder,
+                    fpm: pass_manager,
+                    module,
+                    function: None,
+                    _struct: None,
+                    variables: HashMap::new(),
+                    fn_value_opt: None,
+                    structs,
+                    struct_forms,
+                    struct_forms_keys,
+                    struct_value_opt: None,
+                    struct_type_opt: None,
+
+                    sub_fn_struct: None,
+                    sub_fns_vals,
+                    sub_fns_keys,
+
+                    impl_value_opt: Some(parser::ExprVal::Impl(x.to_vec(), y.clone())),
+
+                    is_set: false,
+
+                };
+                compiler.compile_impl().unwrap();
+                Ok(Returnable::None)
             }
         }
     }
@@ -557,4 +695,5 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 pub enum Returnable<'ctx> {
     FunctionValue(FunctionValue<'ctx>),
     StructType(StructType<'ctx>),
+    None,
 }

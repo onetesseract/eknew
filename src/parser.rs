@@ -41,6 +41,7 @@ pub enum ExprVal {
     Variable(String),
     Return(Option<Box<Expr>>),
     Function(Box<Function>),
+    Impl(Vec<Function>, Type),
 
     Switch(Box<Expr>, Vec<(Expr, Expr)>),
 
@@ -110,6 +111,7 @@ pub struct Struct {
 pub enum TopLevelExpr {
     Struct(Struct),
     Function(Function),
+    Impl(Vec<Function>, Type),
 }
 // represents the Expr parser
 #[derive(Clone)]
@@ -327,6 +329,34 @@ impl<'a> Parser<'a> {
 
     }
 
+    fn parse_impl(&mut self) -> Result<Expr, String> {
+        self.advance().check(self.lexer.clone());
+        self.is_toplevel = false;
+        let statement = self.parse_expr().unwrap();
+        let typ = match statement.ex {
+            ExprVal::Variable(x) => Type::Struct(x),
+            _ => panic!(),
+        };
+        match self.curr() {
+            Token::LBrace => self.advance().check(self.lexer.clone()),
+            _ => return Err("Expected block following impl".to_string()),
+        }
+        let mut impls = vec![];
+        loop {
+            if let Token::RBrace = self.curr() { break; }
+            println!("c: {:?}", self.curr());
+            let f = self.parse_expr().unwrap();
+            let mut f = match f.ex {
+                ExprVal::Function(fun) => fun,
+                _ => return Err("Expected function".to_string()),
+            };
+            impls.push(*f);
+        }
+        self.advance().check(self.lexer.clone());
+        return Ok(Expr { typ: Type::Unknown, ex: ExprVal::Impl(impls, typ) })
+    }
+            
+
     fn parse_id_expr(&mut self) -> Result<Expr, String> { // too big, needs rewrite
         let id = match self.curr() {
             Token::Ident(id) => id,
@@ -337,6 +367,9 @@ impl<'a> Parser<'a> {
         }
         if id == crate::consts::SWITCH_KW {
             return self.parse_switch();
+        }
+        if id == crate::consts::IMPL_BLOCK_KW {
+            return self.parse_impl();
         }
         if self.advance().is_err() {
             return Ok(Expr {typ: self.type_of_var(id.clone()).unwrap(), ex: ExprVal::Variable(id)});
@@ -522,9 +555,10 @@ impl<'a> Parser<'a> {
     fn parse_sub_access(&mut self, e: Expr) -> Expr {
         if !matches!(self.curr(), Token::Dot) { return e }
         self.advance().check(self.lexer.clone());
-        let x = self.parse_id_expr().unwrap();
-        let sub = self.parse_sub_access(x);
-        Expr {typ: Type::Unknown, ex: ExprVal::SubAccess {parent: Box::new(e), sub: Box::new(sub)}}
+        let sb = self.parse_primary().unwrap();
+        self.parse_sub_access(Expr {typ: Type::Unknown, ex: ExprVal::SubAccess {parent: Box::new(e), sub: Box::new(sb)}})
+        // let sub = self.parse_expr().unwrap();
+        // Expr {typ: Type::Unknown, ex: ExprVal::SubAccess {parent: Box::new(x), sub: Box::new(sub)}}
     }
 
     fn parse_unary_expr(&mut self) -> Result<Expr, String> {
@@ -697,6 +731,9 @@ impl<'a> Parser<'a> {
                     ExprVal::StructDef(s) => {
                         Ok(TopLevelExpr::Struct(s))
                     },
+                    ExprVal::Impl(x, y) => {
+                        Ok(TopLevelExpr::Impl(x, y))
+                    }
                     x => Err(format!("Cannot parse this as a top-level def (can only parse functions!) (got {:?})", x))
                 }
             },
