@@ -4,17 +4,15 @@ s {
     i int
 }
 
-impl s {
-    x() int {
-        printi(self.i)
-        return 8
-    }
+st {
+    ps s
 }
-
 
 neonmain() void {
     p s
     p.i = 92
-    printi(p.i)
+    x st
+    x.ps = p
+    printi(x.ps.i)
     return
 }

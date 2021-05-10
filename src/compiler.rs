@@ -35,6 +35,7 @@ pub struct Compiler<'a, 'ctx> {
     sub_fns_vals: &'a mut Vec<HashMap<String, FunctionValue<'ctx>>>,
     sub_fns_keys: &'a mut Vec<BasicTypeEnum<'ctx>>,
 
+
     impl_value_opt: Option<ExprVal>,
 
     is_set: bool,
@@ -395,21 +396,38 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     return Ok(self.compile_expr(&sub).unwrap());
                 } */ else { println!("{:?} {:?}", parent, sub); panic!(); }
             }*/
-
+            
             ExprVal::SubAccess {parent, sub } => {
-                let p = self.compile_expr(&parent).unwrap().expect("non void");
                 if let ExprVal::Variable(n) = sub.ex {
-                    let idx = self.struct_forms_keys.iter().position(|&x| x == p.get_type().ptr_type(inkwell::AddressSpace::Generic)).unwrap();
-                    let s = self.struct_forms[idx].iter().position(|x| *x == n).unwrap();
-                    let al = self.create_entry_block_alloca_with_ty("tmpgepstore", p.get_type());
-                    self.builder.build_store(al, p);
-                    let gep = self.builder.build_struct_gep(al, s as u32, "tmpgep").unwrap();
-                    if self.is_set { return Ok(Some(gep.as_basic_value_enum()))}
-                    let s = self.builder.build_load(gep, "tmpgepload");
-                    return Ok(Some(s));
-                } else if let ExprVal::Call { .. } = &sub.ex {
-                    self.sub_fn_struct = Some(p);
-                    return self.compile_expr(&sub);
+                    if let ExprVal::Variable(pname) = &parent.ex {
+                        let p = self.compile_expr(&parent).unwrap().expect("non void");
+                        println!("{:?}", parent);
+                        println!("HER");
+                        let idx = self.struct_forms_keys.iter().position(|&x| x == p.get_type().ptr_type(inkwell::AddressSpace::Generic)).unwrap();
+                        let s = self.struct_forms[idx].iter().position(|x| *x == n).unwrap();
+                        println!("{:?}", self.struct_forms[idx]);
+                        
+                        let gep = self.builder.build_struct_gep(*self.variables.get(pname).unwrap(), s as u32, "tmpgep").unwrap();
+                        if self.is_set { return Ok(Some(gep.as_basic_value_enum()))}
+                        let s = self.builder.build_load(gep, "tmpgepload");
+                        // self.sub_val_ptr = Some(gep);
+                        return Ok(Some(s));
+                    } else {
+                        let s = self.is_set;
+                        self.is_set = true;
+                        let pa = self.compile_expr(&parent).unwrap().expect("void consumes");
+                        self.is_set = s;
+                        let idx = self.struct_forms_keys.iter().position(|&x| x == pa.get_type().into_pointer_type()).unwrap();
+                        let s = self.struct_forms[idx].iter().position(|x| *x == n).unwrap();
+
+                        let gep = self.builder.build_struct_gep(pa.into_pointer_value(), s as u32, "tmpgep").unwrap();
+                        if self.is_set { return Ok(Some(gep.as_basic_value_enum()))}
+                        let s = self.builder.build_load(gep, "tmpgepload");
+                        return Ok(Some(s));
+                    }
+                } 
+                else if let ExprVal::Call { .. } = &sub.ex {
+                    panic!();
                 }
                 panic!();
                 Ok(None)
