@@ -9,13 +9,12 @@ other_struct {
 }
 
 impl other_struct {
-    x() s {
-        return self.p
+    x() int {
+        return self.p.x
     }
 }
 
-neonmain() void {
-    f other_struct
+neonmain() vo
     z s
     z.x = 8
     f.p = z

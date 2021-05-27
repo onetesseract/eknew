@@ -28,8 +28,6 @@ pub struct Compiler<'a, 'ctx> {
 
     variables: std::collections::HashMap<String, PointerValue<'ctx>>,
     fn_value_opt: Option<FunctionValue<'ctx>>,
-    struct_value_opt: Option<PointerValue<'ctx>>,
-    struct_type_opt: Option<PointerType<'ctx>>,
 
     sub_fn_struct: Option<BasicValueEnum<'ctx>>,
     sub_fns_vals: &'a mut Vec<HashMap<String, FunctionValue<'ctx>>>,
@@ -90,7 +88,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         }
         
     }
-
+    /*
     fn create_entry_block_alloca_with_ty(&self, name: &str, ty: BasicTypeEnum<'ctx>) -> PointerValue<'ctx> {
         let builder = self.context.create_builder();
         let entry = self.fn_value().get_first_basic_block().unwrap();
@@ -99,7 +97,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             None => builder.position_at_end(entry),
         }
         builder.build_alloca(ty, name)
-    }
+    }*/
 
     fn compile_expr(&mut self, expr: &Expr) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         match expr.ex.clone() {
@@ -410,7 +408,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                         let gep = self.builder.build_struct_gep(*self.variables.get(pname).unwrap(), s as u32, "tmpgep").unwrap();
                         if self.is_set { return Ok(Some(gep.as_basic_value_enum()))}
                         let s = self.builder.build_load(gep, "tmpgepload");
-                        // self.sub_val_ptr = Some(gep);
+
                         return Ok(Some(s));
                     } else {
                         let s = self.is_set;
@@ -427,10 +425,14 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     }
                 } 
                 else if let ExprVal::Call { .. } = &sub.ex {
-                    panic!();
+                    let p = self.compile_expr(&parent).unwrap().expect("void");
+                    let s = self.sub_fn_struct;
+                    self.sub_fn_struct = Some(p);
+                    let res = self.compile_expr(&sub);
+                    self.sub_fn_struct = s;
+                    return Ok(res.unwrap())
                 }
-                panic!();
-                Ok(None)
+                panic!("idk wtf is happening here");
             }
             ExprVal::Block { body } => {
                 let mut last = None;
@@ -582,7 +584,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
     fn compile_impl(&mut self) -> Result<(), String> {
         if let Some(ExprVal::Impl(v, s_type)) = self.impl_value_opt.clone() {
-            let mut v = v.clone();
+            let v = v.clone();
             for mut i in v {
                 i.prototype.args.insert(0, Expr { typ: s_type.clone(), ex: ExprVal::VarDef { name: "self".to_string(), val: None }});
                 self.function = Some(i.clone());
@@ -634,8 +636,6 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     structs,
                     struct_forms,
                     struct_forms_keys,
-                    struct_value_opt: None,
-                    struct_type_opt: None,
 
                     sub_fn_struct: None,
                     sub_fns_vals,
@@ -662,8 +662,6 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     structs,
                     struct_forms,
                     struct_forms_keys,
-                    struct_value_opt: None,
-                    struct_type_opt: None,
 
                     sub_fn_struct: None,
                     sub_fns_vals,
@@ -690,8 +688,6 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     structs,
                     struct_forms,
                     struct_forms_keys,
-                    struct_value_opt: None,
-                    struct_type_opt: None,
 
                     sub_fn_struct: None,
                     sub_fns_vals,

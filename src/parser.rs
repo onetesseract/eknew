@@ -60,6 +60,11 @@ pub enum ExprVal {
         name: String,
         val: Option<Box<Expr>>,
     },
+
+    StructInit {
+        name: String,
+        vals: HashMap<String, Expr>,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -210,7 +215,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr(&mut self) -> Result<Expr, String> {
-        match self.parse_unary_expr() {
+        match self.parse_primary() {
             Ok(left) => { let e = self.parse_sub_access(left); self.parse_binary_expr(0, e)},
             err => err,
         }
@@ -277,7 +282,7 @@ impl<'a> Parser<'a> {
         }
         if self.clone().parse_expr().is_err() {
             return Ok(Expr { typ: Type::Void, ex: ExprVal::Return(None)})
-        }
+        } // TODO: rewrite
         return Ok(Expr { typ: Type::Void, ex: ExprVal::Return(Some(Box::new(self.parse_expr().unwrap())))})
     }
 
@@ -331,12 +336,13 @@ impl<'a> Parser<'a> {
 
     fn parse_impl(&mut self) -> Result<Expr, String> {
         self.advance().check(self.lexer.clone());
-        self.is_toplevel = false;
-        let statement = self.parse_expr().unwrap();
-        let typ = match statement.ex {
-            ExprVal::Variable(x) => Type::Struct(x),
-            _ => panic!(),
+        self.is_toplevel = false; // this was probably false for a reason, but I can't remember so heyyy
+        let statement =  match self.curr() {
+            Token::Ident(id) => id,
+            _ => return Err(format!("Expected id (got {:?}", self.curr())),
         };
+        self.advance().check(self.lexer.clone());
+        let typ = Type::Struct(statement);
         match self.curr() {
             Token::LBrace => self.advance().check(self.lexer.clone()),
             _ => return Err("Expected block following impl".to_string()),
@@ -345,10 +351,11 @@ impl<'a> Parser<'a> {
         loop {
             if let Token::RBrace = self.curr() { break; }
             println!("c: {:?}", self.curr());
+            self.is_toplevel = true;
             let f = self.parse_expr().unwrap();
             let mut f = match f.ex {
                 ExprVal::Function(fun) => fun,
-                _ => return Err("Expected function".to_string()),
+                _ => return Err(format!("Expected function, got {:?}", f).to_string()),
             };
             impls.push(*f);
         }
@@ -414,6 +421,7 @@ impl<'a> Parser<'a> {
 
                 if let Token::Op('=') = self.curr() {
                     self.advance().check(self.lexer.clone());
+                    self.is_toplevel = false;
                     let val = self.parse_expr().unwrap();
                     return Ok(Expr {typ: t, ex: ExprVal::VarDef{ name: id, val: Some(Box::new(val))}})
                 }
@@ -526,7 +534,38 @@ impl<'a> Parser<'a> {
             },
 
             Token::LBrace => {
-                if !self.is_toplevel { return Ok(Expr {typ: self.type_of_var(id.clone()).unwrap(), ex: ExprVal::Variable(id)}) }
+                if !self.is_toplevel { 
+                    self.advance().check(self.lexer.clone());
+                    if let Token::RBrace = self.curr() {
+                        self.advance().check(self.lexer.clone());
+                        return Ok(Expr {typ: Type::Unknown, ex: ExprVal::StructInit {name: id, vals: HashMap::new()}});
+                    }
+                    let mut err;
+                    let mut vals = HashMap::new();
+                    loop {
+                        println!("lc: {:?}", self.curr());
+                        if let Token::RBrace = self.curr() {
+                            self.advance().check(self.lexer.clone());
+                            break;
+                        }
+                        let name = match self.curr() {
+                            Token::Ident(x) => x,
+                            _ => return Err(String::from("Expected ident")),
+                        };
+                        self.advance().check(self.lexer.clone());
+                        if let Token::Op(':') = self.curr() {
+                            self.advance().check(self.lexer.clone());
+                            println!("c: {:?}", self.curr());
+                            let val = self.parse_expr()?;
+                            vals.insert(name, val);
+                        } else {
+                            err = Some("Expected ':'");
+                        }
+                    }
+                    println!("rc: {:?}", self.curr());
+                    return Ok(Expr {typ: Type::Unknown, ex: ExprVal::StructInit {name: id, vals}});
+                    
+                } // return Ok(Expr {typ: self.type_of_var(id.clone()).unwrap(), ex: ExprVal::Variable(id)}) }
                 self.advance().check(self.lexer.clone());
                 if let Token::RBrace = self.curr() {
                     self.advance().check(self.lexer.clone());
@@ -561,29 +600,6 @@ impl<'a> Parser<'a> {
         // Expr {typ: Type::Unknown, ex: ExprVal::SubAccess {parent: Box::new(x), sub: Box::new(sub)}}
     }
 
-    fn parse_unary_expr(&mut self) -> Result<Expr, String> {
-        /* 
-
-        // let typ = self.find_type().unwrap();
-
-        let op = match self.current().unwrap() {
-            Token::Op(ch) => {
-                self.advance();
-                ch
-            },
-            _ => */return self.parse_primary() /*,
-        };
-
-        let mut name = String::from("unary");
-
-        name.push(op);
-
-        Ok(Expr { typ: Type::Unknown, ex: ExprVal::Call {
-            fn_name: name,
-            args: vec![ self.parse_unary_expr().unwrap() ]
-        }})*/
-    }
-
     fn parse_binary_expr(&mut self, prec: i32, mut left: Expr) -> Result<Expr, String> {
         loop {
             let curr_prec = self.get_tok_precedence();
@@ -599,7 +615,7 @@ impl<'a> Parser<'a> {
 
             self.advance().check(self.lexer.clone());
 
-            let mut right = self.parse_unary_expr().unwrap();
+            let mut right = self.parse_primary().unwrap();
 
             let next_prec = self.get_tok_precedence();
 
@@ -714,6 +730,7 @@ impl<'a> Parser<'a> {
             _ => {
                 let s = format!("I don't know how to parse {:?}", self.curr());
                 let l = LexError::with_index(s, self.pos);
+                // panic!("{}", l.err(self.lexer.clone()));
                 return Err(l.err(self.lexer.clone()));
             },
         }

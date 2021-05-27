@@ -1,18 +1,8 @@
-printi(x int) void
-
-s {
-    i int
-}
-
-st {
-    ps s
+some_struct {
+    x int
 }
 
 neonmain() void {
-    p s
-    p.i = 92
-    x st
-    x.ps = p
-    printi(x.ps.i)
+    x some_struct = some_struct {x: 9}
     return
 }
