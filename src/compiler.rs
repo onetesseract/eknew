@@ -1,4 +1,4 @@
-use inkwell::types::{PointerType, StructType};
+use inkwell::{AddressSpace, types::{PointerType, StructType}, values::AnyValue};
 use inkwell::types::BasicType;
 use crate::{inkwell::builder::Builder, parser::{self, Function, Type}};
 use crate::inkwell::context::Context;
@@ -448,6 +448,26 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     self.builder.build_return(Some(&self.compile_expr(&ret.unwrap()).unwrap().expect("Cannot use this as non-void")));
                 }
                 Ok(None)
+            },
+            ExprVal::StructInit {name, vals } => {
+                let s_type = self.structs.get(&name).expect("aaa").clone();
+                let s_form = self.struct_forms_keys.iter().position(|&x| x == s_type.ptr_type(AddressSpace::Generic)).expect("aaa");
+                let s = self.struct_forms[s_form].clone();
+                let mut init_vals: Vec<BasicValueEnum> = Vec::with_capacity(s.len());
+                let mut handled = 0;
+                for _ in &s {
+                    init_vals.push(BasicValueEnum::FloatValue(self.context.f64_type().const_zero()));
+                }
+                for (n, v) in vals {
+                    if !s.contains(&n) { return Err(format!("{} not found in struct def", n))};
+                    let idx = s.iter().position(|x| *x == n).expect("not found");
+                    init_vals[idx] = self.compile_expr(&v).unwrap().expect("void");
+                    handled += 1;
+                }
+                if handled != s.len() { return Err(String::from("Not enough struct def items"))}
+                let struct_val = s_type.const_named_struct(init_vals.as_slice());
+                Ok(Some(struct_val.as_basic_value_enum()))
+
             },
             ExprVal::VarDef {name, val} => {
                 let alloca = self.create_entry_block_alloca(&name, expr.typ.clone());
