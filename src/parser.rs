@@ -253,6 +253,8 @@ impl<'a> Parser<'a> {
 
         self.advance().check(self.lexer.clone());
 
+        self.is_toplevel = false;
+
         let expr = self.parse_expr().unwrap();
 
         match self.current().unwrap() {
