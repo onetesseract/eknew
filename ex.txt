@@ -4,6 +4,7 @@ printi(x int) void
 s {
     x int
 }
+
 other_struct {
     p s
 }

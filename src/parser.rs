@@ -42,6 +42,7 @@ pub enum ExprVal {
     Return(Option<Box<Expr>>),
     Function(Box<Function>),
     Impl(Vec<Function>, Type),
+    Pointer(Box<Expr>),
 
     Switch(Box<Expr>, Vec<(Expr, Expr)>),
 
@@ -387,36 +388,15 @@ impl<'a> Parser<'a> {
 
 
         match self.curr() {
-            Token::Ident(_id) => {
+            Token::Ident(_) | Token::Op('&')=> {
+                /*
                 let isptr  = match &_id as &str {
-                    "ptr" => {self.advance().check(self.lexer.clone()); true}
+                    "&" => {self.advance().check(self.lexer.clone()); true}
                     _ => false
-                };
-                let _id = match self.curr() {
-                    Token::Ident(x) => x,
-                    _ => panic!(),
-                };
-                let t = match &_id as &str {
-                    "f64" => Type::F64,
-                    "str" => Type::Str,
-                    "int" => Type::Int,
-                    "void" => Type::Void,
-                    i => { 
-                        if self.structs.contains(&i.to_string()) { 
-                            if isptr { 
-                                Type::Pointer(Box::new(Type::Struct(i.to_string())))
-                            } else {
-                                Type::Struct(i.to_string())
-                            }
-                        } else {
-                            if isptr { panic!(); }
-                            return Ok(Expr {typ: self.type_of_var(id.clone()).unwrap(), ex: ExprVal::Variable(id)})}
-                        }
-                };
-                let t = match isptr {
-                    true => Type::Pointer(Box::new(t)),
-                    false => t,
-                };
+                };*/
+                let t = self.parse_type();
+                if t.is_err() { return Ok(Expr {typ: Type::Unknown, ex: ExprVal::Variable(id)})}
+                let t = t.unwrap();
                 if self.advance().is_err() {
                     return Ok(Expr {typ: t, ex: ExprVal::VarDef { name: id, val: None}});
                 }
@@ -593,6 +573,34 @@ impl<'a> Parser<'a> {
             _ => Ok(Expr {typ: self.type_of_var(id.clone()).unwrap(), ex: ExprVal::Variable(id)})
         }
     }
+
+    fn parse_type(&mut self) -> Result<Type, String> {
+        match self.curr() {
+            Token::Op('&') => {
+                self.advance();
+                let t = self.parse_type();
+                if t.is_err() { return t }
+                else { Ok(Type::Pointer(Box::new(t.unwrap()))) }
+            }
+            Token::Ident(id) => {
+                // self.advance();
+                match &id as &str {
+                    "f64" => Ok(Type::F64),
+                    "str" => Ok(Type::Str),
+                    "int" => Ok(Type::Int),
+                    "void" => Ok(Type::Void),
+                    i => { 
+                        if self.structs.contains(&i.to_string()) { 
+                            Ok(Type::Struct(i.to_string()))
+                        } else {
+                            Err(format!("Unknown type {}", id))
+                        }
+                    }
+                }
+            },
+            _ => Err("Unexpected token".to_string())
+        }
+    }
     fn parse_sub_access(&mut self, e: Expr) -> Expr {
         if !matches!(self.curr(), Token::Dot) { return e }
         self.advance().check(self.lexer.clone());
@@ -729,6 +737,7 @@ impl<'a> Parser<'a> {
             Token::Comment => { self.advance().check(self.lexer.clone()); self.parse_expr() }
             Token::Op('*') => { self.advance().check(self.lexer.clone()); Ok(Expr {typ: Type::Unknown, ex: ExprVal::Deref(Box::new(self.parse_expr().unwrap()))}) }
             Token::RBrace => self.parse_block(),
+            Token::Op('&') => { self.advance().check(self.lexer.clone()); Ok(Expr {typ: Type::Unknown, ex: ExprVal::Pointer(Box::new(self.parse_expr().unwrap()))}) }
             _ => {
                 let s = format!("I don't know how to parse {:?}", self.curr());
                 let l = LexError::with_index(s, self.pos);

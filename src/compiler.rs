@@ -1,4 +1,4 @@
-use inkwell::{AddressSpace, types::{PointerType, StructType}, values::AnyValue};
+use inkwell::{AddressSpace, types::{PointerType, StructType}};
 use inkwell::types::BasicType;
 use crate::{inkwell::builder::Builder, parser::{self, Function, Type}};
 use crate::inkwell::context::Context;
@@ -74,21 +74,29 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             Some(first_instr) => builder.position_before(&first_instr),
             None => builder.position_at_end(entry),
         }
-        match ty {
-            Type::F64 => builder.build_alloca(self.context.f64_type(), name),
-            Type::Int => builder.build_alloca(self.context.i64_type(), name),
+        let t = self.handle_type(ty);
+        builder.build_alloca(t, name)
+        
+    }
+
+    
+
+    fn handle_type(&self, t: Type) -> BasicTypeEnum<'ctx> {
+        match t {
+            Type::F64 => self.context.f64_type().as_basic_type_enum(),
+            Type::Int => self.context.i64_type().as_basic_type_enum(),
             Type::Struct(s) => {
                 if !self.structs.contains_key(&s) {
                     panic!();
                 }
-                let b = self.structs.get(&s).unwrap().as_basic_type_enum();
-                builder.build_alloca(b, name)
+                self.structs.get(&s).unwrap().as_basic_type_enum()
+            }
+            Type::Pointer(v) => {
+                BasicTypeEnum::PointerType(self.handle_type(*v).ptr_type(AddressSpace::Generic))
             }
             _ => panic!(),
         }
-        
     }
-    /*
     fn create_entry_block_alloca_with_ty(&self, name: &str, ty: BasicTypeEnum<'ctx>) -> PointerValue<'ctx> {
         let builder = self.context.create_builder();
         let entry = self.fn_value().get_first_basic_block().unwrap();
@@ -97,7 +105,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             None => builder.position_at_end(entry),
         }
         builder.build_alloca(ty, name)
-    }*/
+    }
 
     fn compile_expr(&mut self, expr: &Expr) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         match expr.ex.clone() {
@@ -487,6 +495,12 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 let p = self.builder.build_load(self.compile_expr(&e).unwrap().expect("Cannot use this as non-void").into_pointer_value(), "tmpderef");
                 Ok(Some(p))
             }
+            ExprVal::Pointer(v) => {
+                let val = self.compile_expr(&v).unwrap().expect("void");
+                let alloca = self.create_entry_block_alloca_with_ty("tmppointervalhelp", val.get_type());
+                self.builder.build_store(alloca, val);
+                Ok(Some(alloca.as_basic_value_enum()))
+            }
             _ => Err(format!("Cannot compile {:?} as idk how to :/", expr)),
         }
     }
@@ -572,6 +586,8 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
         if function.verify(true) {
             self.fpm.run_on(&function);
+            println!("Done stuff");
+            function.print_to_stderr();
 
             return Ok(function);
         } else {
@@ -584,12 +600,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         let mut types = vec![];
         let s = self._struct.unwrap();
         for i in s.members.clone() {
-            match i.typ {
-                Type::F64 => types.push(BasicTypeEnum::FloatType(self.context.f64_type())),
-                Type::Int => types.push(BasicTypeEnum::IntType(self.context.i64_type())),
-                Type::Struct(s) => types.push(self.structs.get(&s).expect("Could not find struct").as_basic_type_enum()),
-                _ => panic!(),
-            }
+            types.push(self.handle_type(i.typ));
             if let ExprVal::VarDef {name, ..} = i.ex {
                 forms.push(name);
             }

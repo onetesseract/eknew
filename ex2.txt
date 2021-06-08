@@ -1,10 +1,13 @@
-printi(i int) void
+printip(x &int) void
 
-some_struct {
-    x int
+loop() int {
+    i &int = &8
+    printip(i)
+    return loop()
 }
 
 neonmain() void {
-    printi((some_struct {x: 9}).x)
+    loop()
     return
 }
+
