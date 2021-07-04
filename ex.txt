@@ -1,27 +1,6 @@
-printip(x ptr int) void
 printi(x int) void
 
-s {
-    x int
-}
-
-other_struct {
-    p s
-}
-
-impl other_struct {
-    x() int {
-        return self.p.x
-    }
-}
-
-neonmain() vo
-    z s
-    z.x = 8
-    f.p = z
-
-    x other_struct
-
-    printi(f.x())
+neonmain() void {
+    printi(9)
     return
 }
